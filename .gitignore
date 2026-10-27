@@ -20,3 +20,8 @@ CMakeCache.txt
 
 # Rust
 tracker/target
+tracker/tracker-dev.state.json
+tracker/tests/snapshots/*.new.png
+tracker/tests/snapshots/*.diff.png
+tracker/tests/snapshots/*.old.png
+__pycache__/

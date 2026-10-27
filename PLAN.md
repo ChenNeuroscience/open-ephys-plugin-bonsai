@@ -101,8 +101,9 @@ One small difference from Bonsai's External contours: holes inside a blob aren't
 in its area. That doesn't matter for LED blobs. Missing blobs give `NaN` coordinates and
 0 area. (Bonsai currently writes hard-coded 8/4 areas; we write the real pixel counts.)
 
-Config knobs (JSON, editable live in the GUI): `threshold`, `min_area`, `max_area`,
-`mask_polygon`, `downsample` (later), camera selection and backend options.
+Config knobs (JSON, editable live in the GUI): `threshold`, `min_area`, `max_area`, `crop`
+(circle / square / rectangle, rotatable), plus calibration rulers. Camera selection comes from the
+plugin's editor.
 
 ## Phases
 
@@ -117,15 +118,20 @@ Config knobs (JSON, editable live in the GUI): `threshold`, `min_area`, `max_are
 - [x] CMake: Corrosion, link the staticlib (macOS builds are now single-arch, since Corrosion
       can't do universal binaries)
 - [x] Unit tests for the pipeline (synthetic frames with known blobs)
+- [x] Fake scene with perspective: 1x1 m arena, 45 cm walls, mouse with headstage LEDs, tether to a
+      commutator 2 m up
+- [x] Crop modes (circle / square / rectangle) with on-image move/resize/rotate handles
+- [x] Rulers with physical lengths giving mean px/m, which stays visible when rulers are hidden
+- [x] Window state (threshold, crop, rulers) round-trips via `tracker_state_json` into a hidden
+      `tracker_state` plugin parameter, so it's saved with the signal chain (`tracker-dev` uses a file)
+- [x] Offscreen snapshot test of the window (`egui_kittest`, `tests/snapshots/`)
 - [ ] Try it in Open Ephys on macOS (headless) and on the Windows rig (with window)
 - [ ] Windows CI: install Rust in the workflow
 
 **Phase 2: real cameras + config persistence**
 - webcam backend (nokhwa); rig camera backend (Spinnaker or cameleon)
-- polygon mask editor in the GUI (click to add or drag vertices); config saved in the
-  plugin's XML state (C++ owns persistence and passes the JSON string)
 - wgpu shader-based video view (zoom/pan, threshold preview as a shader LUT)
-- persist the GUI's live config changes (threshold, mask) back to the plugin's parameters
+- polygon crop (for arenas that aren't circles or rectangles), if needed
 
 **Phase 3: performance and timing**
 - avoid per-frame allocation (reuse label buffers); ROI bounding box of the polygon

@@ -26,6 +26,10 @@ int64_t tracker_poll(const TrackerHandle* handle, TrackerSample* out, size_t max
 /* Writes a NUL-terminated status line into buf; returns its untruncated length. */
 size_t tracker_status(const TrackerHandle* handle, char* buf, size_t len);
 
+/* Writes the window-adjustable state (crop, rulers, threshold...) as NUL-terminated JSON, to be persisted and
+   passed back as config.state next time. Returns the untruncated length; retry with a bigger buffer if >= len. */
+size_t tracker_state_json(const TrackerHandle* handle, char* buf, size_t len);
+
 /* Stops capture, closes the window, frees the handle. NULL is ignored. */
 void tracker_stop(TrackerHandle* handle);
 

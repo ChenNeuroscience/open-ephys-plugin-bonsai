@@ -81,6 +81,20 @@ pub unsafe extern "C" fn tracker_status(handle: *const TrackerHandle, buf: *mut 
     })
 }
 
+/// Copies the current [`crate::config::TrackerState`] (crop, rulers, threshold...) as JSON into `buf`, for the
+/// host to persist and pass back as `state` in the next config. Returns its full length; call again with a
+/// bigger buffer if that's >= `len`.
+///
+/// # Safety
+/// `handle` must come from `tracker_start`; `buf` must be null or point to `len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn tracker_state_json(handle: *const TrackerHandle, buf: *mut c_char, len: usize) -> usize {
+    guard(0, || {
+        let state = (*handle).0.shared().state.lock().unwrap().clone();
+        write_str(&serde_json::to_string(&state).unwrap_or_default(), buf, len)
+    })
+}
+
 /// Stops capture, closes the window and frees the handle. Blocks until the capture thread exits.
 ///
 /// # Safety

@@ -1,4 +1,6 @@
 //! Configuration, passed across the FFI boundary as JSON so the C ABI doesn't change as knobs are added.
+//!
+//! Image coordinates are continuous pixels: pixel (i, j) covers [i, i+1) x [j, j+1).
 
 use serde::{Deserialize, Serialize};
 
@@ -6,9 +8,17 @@ use serde::{Deserialize, Serialize};
 #[serde(default)]
 pub struct Config {
     pub camera: CameraConfig,
-    pub pipeline: PipelineConfig,
     /// Open the live-view window (ignored where an in-process window isn't supported, i.e. macOS).
     pub show_window: bool,
+    pub state: TrackerState,
+}
+
+/// Everything adjustable from the tracker window. Round-trips through the host so it persists between runs.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TrackerState {
+    pub pipeline: PipelineConfig,
+    pub calibration: Calibration,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -34,12 +44,150 @@ pub struct PipelineConfig {
     pub min_area: u32,
     /// `None` means unbounded.
     pub max_area: Option<u32>,
-    /// Only pixels inside this polygon (image coordinates) are considered. `None` means the whole frame.
-    pub mask_polygon: Option<Vec<[i32; 2]>>,
+    /// Only pixels inside this region are considered.
+    pub crop: Crop,
 }
 
 impl Default for PipelineConfig {
     fn default() -> Self {
-        PipelineConfig { threshold: 200, min_area: 5, max_area: None, mask_polygon: None }
+        PipelineConfig { threshold: 200, min_area: 5, max_area: None, crop: Crop::None }
+    }
+}
+
+/// Region of interest. Angles are radians, clockwise on screen (since y points down).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "shape", rename_all = "snake_case")]
+pub enum Crop {
+    #[default]
+    None,
+    Circle { center: [f32; 2], radius: f32 },
+    Square { center: [f32; 2], size: f32, angle: f32 },
+    Rectangle { center: [f32; 2], width: f32, height: f32, angle: f32 },
+}
+
+impl Crop {
+    pub fn center(&self) -> Option<[f32; 2]> {
+        match *self {
+            Crop::None => None,
+            Crop::Circle { center, .. } | Crop::Square { center, .. } | Crop::Rectangle { center, .. } => Some(center),
+        }
+    }
+
+    pub fn angle(&self) -> f32 {
+        match *self {
+            Crop::Square { angle, .. } | Crop::Rectangle { angle, .. } => angle,
+            _ => 0.0,
+        }
+    }
+
+    /// Half width and half height in the shape's own (rotated) frame; for a circle, the radius twice.
+    pub fn half_extents(&self) -> Option<[f32; 2]> {
+        match *self {
+            Crop::None => None,
+            Crop::Circle { radius, .. } => Some([radius, radius]),
+            Crop::Square { size, .. } => Some([size / 2.0, size / 2.0]),
+            Crop::Rectangle { width, height, .. } => Some([width / 2.0, height / 2.0]),
+        }
+    }
+
+    pub fn contains(&self, p: [f32; 2]) -> bool {
+        let (Some(center), Some([hw, hh])) = (self.center(), self.half_extents()) else { return true };
+        let [x, y] = to_local(center, self.angle(), p);
+        match self {
+            Crop::Circle { .. } => x * x + y * y <= hw * hw,
+            _ => x.abs() <= hw && y.abs() <= hh,
+        }
+    }
+
+    pub fn set_center(&mut self, c: [f32; 2]) {
+        match self {
+            Crop::None => {}
+            Crop::Circle { center, .. } | Crop::Square { center, .. } | Crop::Rectangle { center, .. } => *center = c,
+        }
+    }
+}
+
+/// Rotates `p` about `center` by -angle, giving coordinates in a shape's own frame.
+pub fn to_local(center: [f32; 2], angle: f32, p: [f32; 2]) -> [f32; 2] {
+    let (s, c) = angle.sin_cos();
+    let (dx, dy) = (p[0] - center[0], p[1] - center[1]);
+    [dx * c + dy * s, -dx * s + dy * c]
+}
+
+/// Inverse of [`to_local`].
+pub fn from_local(center: [f32; 2], angle: f32, l: [f32; 2]) -> [f32; 2] {
+    let (s, c) = angle.sin_cos();
+    [center[0] + l[0] * c - l[1] * s, center[1] + l[0] * s + l[1] * c]
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Calibration {
+    pub rulers: Vec<Ruler>,
+    pub show_rulers: bool,
+}
+
+impl Default for Calibration {
+    fn default() -> Self {
+        Calibration { rulers: Vec::new(), show_rulers: true }
+    }
+}
+
+impl Calibration {
+    /// Mean over rulers that have a physical length entered.
+    pub fn pixels_per_meter(&self) -> Option<f32> {
+        let values: Vec<f32> = self.rulers.iter().filter_map(Ruler::pixels_per_meter).collect();
+        (!values.is_empty()).then(|| values.iter().sum::<f32>() / values.len() as f32)
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Ruler {
+    pub a: [f32; 2],
+    pub b: [f32; 2],
+    /// Physical length; 0 means not entered yet.
+    pub length_cm: f32,
+}
+
+impl Ruler {
+    pub fn pixels(&self) -> f32 {
+        (self.b[0] - self.a[0]).hypot(self.b[1] - self.a[1])
+    }
+
+    pub fn pixels_per_meter(&self) -> Option<f32> {
+        (self.length_cm > 0.0).then(|| self.pixels() / (self.length_cm / 100.0))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rotated_rectangle_contains() {
+        let crop = Crop::Rectangle { center: [50.0, 50.0], width: 40.0, height: 10.0, angle: std::f32::consts::FRAC_PI_2 };
+        // Rotated by 90 degrees the long side runs vertically.
+        assert!(crop.contains([50.0, 68.0]));
+        assert!(!crop.contains([68.0, 50.0]));
+    }
+
+    #[test]
+    fn local_round_trip() {
+        let (c, a, p) = ([3.0, -2.0], 0.7, [10.0, 4.0]);
+        let back = from_local(c, a, to_local(c, a, p));
+        assert!((back[0] - p[0]).abs() < 1e-4 && (back[1] - p[1]).abs() < 1e-4);
+    }
+
+    #[test]
+    fn pixels_per_meter_averages_measured_rulers() {
+        let calibration = Calibration {
+            rulers: vec![
+                Ruler { a: [0.0, 0.0], b: [300.0, 0.0], length_cm: 100.0 },
+                Ruler { a: [0.0, 0.0], b: [0.0, 160.0], length_cm: 50.0 },
+                Ruler { a: [0.0, 0.0], b: [10.0, 0.0], length_cm: 0.0 }, // not measured: ignored
+            ],
+            show_rulers: false,
+        };
+        assert_eq!(calibration.pixels_per_meter(), Some(310.0));
     }
 }

@@ -26,3 +26,6 @@ codegen-units = 1
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 winit = "0.30"
+
+[dev-dependencies]
+egui_kittest = { version = "0.37", features = ["wgpu", "snapshot"] }

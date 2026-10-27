@@ -53,13 +53,17 @@ namespace Bonsai {
     {
         addCategoricalParameter(Parameter::PROCESSOR_SCOPE, "camera", "Camera", "Camera source (fake = tools/fake_camera.py over TCP)", CAMERA_KINDS, 0, true);
         addStringParameter(Parameter::PROCESSOR_SCOPE, "camera_address", "Address", "host:port of the fake camera", "127.0.0.1:27030", true);
-        addIntParameter(Parameter::PROCESSOR_SCOPE, "threshold", "Threshold", "Initial brightness threshold (0-255); adjust live in the tracker window", 200, 0, 255, true);
         addBooleanParameter(Parameter::PROCESSOR_SCOPE, "show_window", "Window", "Open the tracker window during acquisition (not supported on macOS)", true, true);
         addIntParameter(Parameter::PROCESSOR_SCOPE, "sample_rate","Sample Rate", "Sample Rate (Hz) to show on data stream; should match the camera frame rate.", 50, 1, 1000, true);
+        // Not shown in the editor: crop, rulers, threshold etc. as set in the tracker window, saved with the signal chain.
+        addStringParameter(Parameter::PROCESSOR_SCOPE, "tracker_state", "Tracker state", "Settings from the tracker window (JSON)", "", false);
     }
     
     void DataThreadPlugin::parameterValueChanged (Parameter* parameter)
     {
+        if (parameter->getName() == "tracker_state") {
+            return; // only read when acquisition starts
+        }
         CoreServices::updateSignalChain(sourceNode);
     }
 
@@ -76,13 +80,13 @@ namespace Bonsai {
             camera->setProperty("fps", (int) getParameter("sample_rate")->getValue());
         }
 
-        auto* pipeline = new DynamicObject();
-        pipeline->setProperty("threshold", (int) getParameter("threshold")->getValue());
-
         auto* config = new DynamicObject();
         config->setProperty("camera", var(camera));
-        config->setProperty("pipeline", var(pipeline));
         config->setProperty("show_window", (bool) getParameter("show_window")->getValue());
+        var state = JSON::parse(getParameter("tracker_state")->getValueAsString());
+        if (state.isObject()) {
+            config->setProperty("state", state);
+        }
         return JSON::toString(var(config), true);
     }
 
@@ -147,11 +151,25 @@ namespace Bonsai {
         if (!stopThread(500)) {
             return false;
         }
+        saveTrackerState();
         tracker_stop(tracker);
         tracker = nullptr;
         sampleWriter = nullptr;
         sourceBuffers.getFirst()->clear();
         return true;
+    }
+
+    void DataThreadPlugin::saveTrackerState()
+    {
+        std::vector<char> buf(4096);
+        size_t len = tracker_state_json(tracker, buf.data(), buf.size());
+        if (len >= buf.size()) {
+            buf.resize(len + 1);
+            len = tracker_state_json(tracker, buf.data(), buf.size());
+        }
+        if (len > 0) {
+            getParameter("tracker_state")->setNextValue(String::fromUTF8(buf.data(), (int) len), false);
+        }
     }
 
     String DataThreadPlugin::getTrackerStatus()

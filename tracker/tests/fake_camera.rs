@@ -4,7 +4,7 @@
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use tracker::config::{CameraConfig, Config};
+use tracker::config::{CameraConfig, Config, Crop};
 use tracker::pipeline::TrackerSample;
 use tracker::tracker::Tracker;
 
@@ -20,8 +20,8 @@ fn fake_camera_end_to_end() {
         .expect("run python3");
 
     let mut config = Config { camera: CameraConfig::Fake { address: format!("127.0.0.1:{port}") }, ..Default::default() };
-    // Exclude the lamp reflection in the top-right corner, as the mask would on the rig.
-    config.pipeline.mask_polygon = Some(vec![[0, 0], [580, 0], [580, 480], [0, 480]]);
+    // Exclude the glint on the room floor to the right of the arena, as the crop would on the rig.
+    config.state.pipeline.crop = Crop::Square { center: [320.0, 240.0], size: 450.0, angle: 0.0 };
     let tracker = Tracker::start(config);
 
     let mut buf = [TrackerSample { timestamp: 0.0, values: [0.0; 6] }; 64];
@@ -38,7 +38,9 @@ fn fake_camera_end_to_end() {
     assert!(samples.len() >= 100, "only got {} samples; stats {stats:?}", samples.len());
     let span = samples.last().unwrap().timestamp - samples[0].timestamp;
     assert!((1.5..2.5).contains(&span), "100 samples at 50fps should span ~2s, got {span}");
-    let with_led = samples.iter().filter(|s| s.values[4] > 50.0 && s.values[4] < 120.0).count();
-    assert!(with_led > 80, "big LED (r=5, ~80px) should be seen in most frames; got {with_led}/100");
+    let with_led = samples.iter().filter(|s| s.values[4] > 15.0 && s.values[4] < 60.0).count();
+    assert!(with_led > 80, "big LED (r~3, ~30px) should be seen in most frames; got {with_led}/100");
+    let in_arena = samples.iter().filter(|s| s.values[0] > 90.0 && s.values[0] < 550.0).count();
+    assert_eq!(in_arena, with_led, "the glint outside the arena should be cropped out");
     println!("{stats:?}\nfirst: {:?}", samples[0]);
 }

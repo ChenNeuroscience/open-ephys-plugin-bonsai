@@ -100,6 +100,9 @@ private:
     /** JSON config for the Rust tracker, see tracker/src/config.rs */
     String buildTrackerConfig();
 
+    /** Copies the tracker window's settings into the tracker_state parameter, so they're saved with the signal chain */
+    void saveTrackerState();
+
     TrackerHandle* tracker = nullptr;
     std::unique_ptr<SampleWriter> sampleWriter;
 

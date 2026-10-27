@@ -33,9 +33,8 @@ namespace Bonsai {
         desiredWidth = 260;
 		addComboBoxParameterEditor(Parameter::PROCESSOR_SCOPE, "camera", 10, 25);
 		addTextBoxParameterEditor(Parameter::PROCESSOR_SCOPE, "camera_address", 10, 45);
-		addTextBoxParameterEditor(Parameter::PROCESSOR_SCOPE, "threshold", 10, 65);
-		addToggleParameterEditor(Parameter::PROCESSOR_SCOPE, "show_window", 10, 85);
-		addTextBoxParameterEditor(Parameter::PROCESSOR_SCOPE, "sample_rate", 10, 105);
+		addToggleParameterEditor(Parameter::PROCESSOR_SCOPE, "show_window", 10, 65);
+		addTextBoxParameterEditor(Parameter::PROCESSOR_SCOPE, "sample_rate", 10, 85);
 		sampleQualityComponent.setBounds(175, 45, SampleQualityComponent::width, SampleQualityComponent::height);
         addAndMakeVisible(&sampleQualityComponent);
 

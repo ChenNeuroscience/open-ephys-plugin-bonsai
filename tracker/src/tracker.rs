@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TrySendError};
 
 use crate::camera::{self, Frame};
-use crate::config::{CameraConfig, Config, PipelineConfig};
+use crate::config::{CameraConfig, Config, TrackerState};
 use crate::pipeline::{Blob, Pipeline, TrackerSample};
 
 /// Enough for tens of seconds at typical frame rates if Open Ephys stalls.
@@ -33,8 +33,8 @@ pub struct Stats {
 
 #[derive(Default)]
 pub struct Shared {
-    /// Written by the GUI, read by the capture thread every frame.
-    pub pipeline: Mutex<PipelineConfig>,
+    /// Written by the GUI; the pipeline part is read by the capture thread every frame.
+    pub state: Mutex<TrackerState>,
     pub latest: Mutex<Option<Arc<View>>>,
     pub status: Mutex<String>,
     pub stats: Mutex<Stats>,
@@ -63,7 +63,7 @@ pub struct Tracker {
 
 impl Tracker {
     pub fn start(config: Config) -> Tracker {
-        let shared = Arc::new(Shared { pipeline: Mutex::new(config.pipeline), ..Default::default() });
+        let shared = Arc::new(Shared { state: Mutex::new(config.state), ..Default::default() });
         let (tx, rx) = crossbeam_channel::bounded(SAMPLE_QUEUE_LEN);
         let thread_shared = shared.clone();
         let camera_config = config.camera;
@@ -149,7 +149,7 @@ fn capture_loop(shared: &Shared, camera_config: &CameraConfig, tx: &Sender<Track
             };
 
             let t0 = Instant::now();
-            let config = shared.pipeline.lock().unwrap().clone();
+            let config = shared.state.lock().unwrap().pipeline.clone();
             let blobs = pipeline.process(&frame.image, &config);
             let process_ms = t0.elapsed().as_secs_f32() * 1e3;
 

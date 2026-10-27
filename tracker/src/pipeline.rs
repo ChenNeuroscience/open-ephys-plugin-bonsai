@@ -1,12 +1,10 @@
-//! Mirrors the Bonsai workflow: Grayscale → CropPolygon → Threshold → FindContours →
+//! Mirrors the Bonsai workflow: Grayscale → Crop → Threshold → FindContours →
 //! BinaryRegionAnalysis → SortBinaryRegions, reduced to the two largest blobs.
 
 use image::{GrayImage, Luma};
-use imageproc::drawing::draw_polygon_mut;
-use imageproc::point::Point;
 use imageproc::region_labelling::{connected_components, Connectivity};
 
-use crate::config::PipelineConfig;
+use crate::config::{Crop, PipelineConfig};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Blob {
@@ -39,8 +37,30 @@ impl TrackerSample {
 
 #[derive(Default)]
 pub struct Pipeline {
-    /// Cached polygon mask, rebuilt when the polygon or frame size changes.
-    mask: Option<(Vec<[i32; 2]>, GrayImage)>,
+    mask: MaskCache,
+}
+
+/// Rasterised crop (255 inside, 0 outside), rebuilt only when the crop or frame size changes.
+#[derive(Default)]
+pub struct MaskCache {
+    key: Option<(Crop, u32, u32)>,
+    mask: Option<GrayImage>,
+}
+
+impl MaskCache {
+    /// `None` when there's no crop, i.e. everything is inside.
+    pub fn get(&mut self, crop: &Crop, width: u32, height: u32) -> Option<&GrayImage> {
+        let key = (*crop, width, height);
+        if self.key != Some(key) {
+            self.mask = (*crop != Crop::None).then(|| {
+                GrayImage::from_fn(width, height, |x, y| {
+                    Luma([if crop.contains([x as f32 + 0.5, y as f32 + 0.5]) { 255 } else { 0 }])
+                })
+            });
+            self.key = Some(key);
+        }
+        self.mask.as_ref()
+    }
 }
 
 #[derive(Default, Clone, Copy)]
@@ -53,7 +73,7 @@ struct Accum {
 impl Pipeline {
     /// Returns blobs passing the area filter, largest first.
     pub fn process(&mut self, image: &GrayImage, config: &PipelineConfig) -> Vec<Blob> {
-        let mask = self.mask_for(image, config);
+        let mask = self.mask.get(&config.crop, image.width(), image.height());
         let binary = GrayImage::from_fn(image.width(), image.height(), |x, y| {
             let inside = mask.map_or(true, |m| m.get_pixel(x, y)[0] != 0);
             Luma([if inside && image.get_pixel(x, y)[0] > config.threshold { 255 } else { 0 }])
@@ -88,28 +108,6 @@ impl Pipeline {
         blobs.sort_by(|a, b| b.area.cmp(&a.area));
         blobs
     }
-
-    fn mask_for(&mut self, image: &GrayImage, config: &PipelineConfig) -> Option<&GrayImage> {
-        let Some(polygon) = config.mask_polygon.as_ref().filter(|p| p.len() >= 3) else {
-            self.mask = None;
-            return None;
-        };
-        let stale = match &self.mask {
-            Some((p, m)) => p != polygon || m.dimensions() != image.dimensions(),
-            None => true,
-        };
-        if stale {
-            let mut m = GrayImage::new(image.width(), image.height());
-            let mut points: Vec<Point<i32>> = polygon.iter().map(|&[x, y]| Point::new(x, y)).collect();
-            // draw_polygon_mut closes the polygon itself and panics if first == last.
-            if points.first() == points.last() {
-                points.pop();
-            }
-            draw_polygon_mut(&mut m, &points, Luma([255]));
-            self.mask = Some((polygon.clone(), m));
-        }
-        self.mask.as_ref().map(|(_, m)| m)
-    }
 }
 
 #[cfg(test)]
@@ -138,7 +136,7 @@ mod tests {
     #[test]
     fn mask_excludes_outside_pixels() {
         let config = PipelineConfig {
-            mask_polygon: Some(vec![[0, 0], [40, 0], [40, 40], [0, 40]]),
+            crop: Crop::Rectangle { center: [20.0, 20.0], width: 40.0, height: 40.0, angle: 0.0 },
             ..Default::default()
         };
         let blobs = Pipeline::default().process(&scene(), &config);
