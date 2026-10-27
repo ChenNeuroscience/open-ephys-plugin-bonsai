@@ -18,7 +18,30 @@ pub struct Config {
 #[serde(default)]
 pub struct TrackerState {
     pub pipeline: PipelineConfig,
+    /// Hidden: the outside of the crop is masked out. Visible: the whole frame is shown with the crop outline.
+    pub crop_overlay: Overlay,
     pub calibration: Calibration,
+}
+
+/// Display state of something drawn over the video.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Overlay {
+    pub visible: bool,
+    /// Locked overlays are drawn but can't be dragged.
+    pub locked: bool,
+}
+
+impl Default for Overlay {
+    fn default() -> Self {
+        Overlay { visible: true, locked: false }
+    }
+}
+
+impl Overlay {
+    pub fn editable(&self) -> bool {
+        self.visible && !self.locked
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -120,17 +143,12 @@ pub fn from_local(center: [f32; 2], angle: f32, l: [f32; 2]) -> [f32; 2] {
     [center[0] + l[0] * c - l[1] * s, center[1] + l[0] * s + l[1] * c]
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Calibration {
     pub rulers: Vec<Ruler>,
-    pub show_rulers: bool,
-}
-
-impl Default for Calibration {
-    fn default() -> Self {
-        Calibration { rulers: Vec::new(), show_rulers: true }
-    }
+    /// Applies to all rulers. Hidden rulers still count towards [`Calibration::pixels_per_meter`].
+    pub overlay: Overlay,
 }
 
 impl Calibration {
@@ -186,7 +204,7 @@ mod tests {
                 Ruler { a: [0.0, 0.0], b: [0.0, 160.0], length_cm: 50.0 },
                 Ruler { a: [0.0, 0.0], b: [10.0, 0.0], length_cm: 0.0 }, // not measured: ignored
             ],
-            show_rulers: false,
+            overlay: Overlay { visible: false, locked: true },
         };
         assert_eq!(calibration.pixels_per_meter(), Some(310.0));
     }

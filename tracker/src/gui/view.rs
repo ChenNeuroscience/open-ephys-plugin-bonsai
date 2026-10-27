@@ -7,7 +7,7 @@ use eframe::egui::{
     TextureHandle, TextureOptions,
 };
 
-use crate::config::{from_local, to_local, Crop, PipelineConfig, TrackerState};
+use crate::config::{from_local, to_local, Crop, Overlay, TrackerState};
 use crate::pipeline::MaskCache;
 use crate::tracker::View;
 
@@ -28,7 +28,6 @@ const ROTATE_SNAP: f32 = 15.0 * PI / 180.0;
 #[derive(Clone, Copy)]
 pub struct Options {
     pub highlight_threshold: bool,
-    pub edit_crop: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -55,6 +54,7 @@ struct TextureKey {
     highlight: bool,
     threshold: u8,
     crop: Crop,
+    crop_visible: bool,
 }
 
 /// Maps between image pixels and screen points for the displayed frame.
@@ -91,7 +91,7 @@ impl VideoView {
             ui.centered_and_justified(|ui| ui.label("No frames yet"));
             return;
         };
-        self.update_texture(ui.ctx(), view, &state.pipeline, opts.highlight_threshold);
+        self.update_texture(ui.ctx(), view, state, opts.highlight_threshold);
         let Some(texture) = &self.texture else { return };
 
         // Fit the frame in the available space, preserving aspect ratio.
@@ -103,12 +103,13 @@ impl VideoView {
         let xf = Xform { origin: response.rect.min, scale };
         painter.image(texture.id(), response.rect, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
 
-        self.interact(ui, &response, xf, state, opts);
+        self.interact(ui, &response, xf, state);
 
-        draw_crop(&painter, xf, &state.pipeline.crop, opts.edit_crop);
-        if state.calibration.show_rulers {
+        draw_crop(&painter, xf, &state.pipeline.crop, state.crop_overlay);
+        let rulers = state.calibration.overlay;
+        if rulers.visible {
             for (i, ruler) in state.calibration.rulers.iter().enumerate() {
-                draw_ruler(&painter, xf, i, ruler);
+                draw_ruler(&painter, xf, i, ruler, rulers.locked);
             }
         }
         for (blob, colour) in view.blobs.iter().zip(BLOB_COLOURS) {
@@ -121,8 +122,18 @@ impl VideoView {
         }
     }
 
-    fn update_texture(&mut self, ctx: &egui::Context, view: &View, pipeline: &PipelineConfig, highlight: bool) {
-        let key = TextureKey { frame: view.frame.id, highlight, threshold: pipeline.threshold, crop: pipeline.crop };
+    /// Inside the crop: the frame, with above-threshold pixels highlighted. Outside: the plain frame while the
+    /// crop overlay is visible, masked to black when it's hidden.
+    fn update_texture(&mut self, ctx: &egui::Context, view: &View, state: &TrackerState, highlight: bool) {
+        let pipeline = &state.pipeline;
+        let crop_visible = state.crop_overlay.visible;
+        let key = TextureKey {
+            frame: view.frame.id,
+            highlight,
+            threshold: pipeline.threshold,
+            crop: pipeline.crop,
+            crop_visible,
+        };
         if self.texture_key == Some(key) && self.texture.is_some() {
             return;
         }
@@ -135,7 +146,7 @@ impl VideoView {
             .enumerate()
             .map(|(i, &v)| {
                 if mask.is_some_and(|m| m[i] == 0) {
-                    Color32::from_gray(v / 3) // outside the crop: dimmed
+                    if crop_visible { Color32::from_gray(v) } else { Color32::BLACK }
                 } else if highlight && v > threshold {
                     HIGHLIGHT_COLOUR
                 } else {
@@ -151,10 +162,10 @@ impl VideoView {
         self.texture_key = Some(key);
     }
 
-    fn interact(&mut self, ui: &egui::Ui, response: &Response, xf: Xform, state: &mut TrackerState, opts: Options) {
+    fn interact(&mut self, ui: &egui::Ui, response: &Response, xf: Xform, state: &mut TrackerState) {
         if response.drag_started() {
             if let Some(origin) = ui.input(|i| i.pointer.press_origin()) {
-                self.drag = hit(origin, xf, state, opts).map(|target| Drag { target, last: xf.to_image(origin) });
+                self.drag = hit(origin, xf, state).map(|target| Drag { target, last: xf.to_image(origin) });
             }
         }
         if response.dragged() {
@@ -169,7 +180,7 @@ impl VideoView {
             self.drag = None;
         }
 
-        let hovered = || response.hover_pos().and_then(|p| hit(p, xf, state, opts));
+        let hovered = || response.hover_pos().and_then(|p| hit(p, xf, state));
         if self.drag.is_some() {
             ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
         } else if let Some(target) = hovered() {
@@ -179,15 +190,15 @@ impl VideoView {
 }
 
 /// Point handles in priority order, in image coordinates.
-fn handles(xf: Xform, state: &TrackerState, opts: Options) -> Vec<(Target, [f32; 2])> {
+fn handles(xf: Xform, state: &TrackerState) -> Vec<(Target, [f32; 2])> {
     let mut out = Vec::new();
-    if state.calibration.show_rulers {
+    if state.calibration.overlay.editable() {
         for (i, r) in state.calibration.rulers.iter().enumerate() {
             out.push((Target::RulerEnd { ruler: i, end: 0 }, r.a));
             out.push((Target::RulerEnd { ruler: i, end: 1 }, r.b));
         }
     }
-    if opts.edit_crop {
+    if state.crop_overlay.editable() {
         out.extend(crop_handles(&state.pipeline.crop, ROTATE_STALK / xf.scale));
     }
     out
@@ -214,8 +225,8 @@ fn crop_handles(crop: &Crop, stalk: f32) -> Vec<(Target, [f32; 2])> {
     }
 }
 
-fn hit(pos: Pos2, xf: Xform, state: &TrackerState, opts: Options) -> Option<Target> {
-    let nearest = handles(xf, state, opts)
+fn hit(pos: Pos2, xf: Xform, state: &TrackerState) -> Option<Target> {
+    let nearest = handles(xf, state)
         .into_iter()
         .map(|(t, p)| (t, xf.to_screen(p).distance(pos)))
         .filter(|&(_, d)| d <= HIT_RADIUS)
@@ -223,7 +234,7 @@ fn hit(pos: Pos2, xf: Xform, state: &TrackerState, opts: Options) -> Option<Targ
     if let Some((target, _)) = nearest {
         return Some(target);
     }
-    if state.calibration.show_rulers {
+    if state.calibration.overlay.editable() {
         for (i, r) in state.calibration.rulers.iter().enumerate() {
             if distance_to_segment(pos, xf.to_screen(r.a), xf.to_screen(r.b)) <= RULER_HIT_DISTANCE {
                 return Some(Target::RulerMove(i));
@@ -231,7 +242,7 @@ fn hit(pos: Pos2, xf: Xform, state: &TrackerState, opts: Options) -> Option<Targ
         }
     }
     let crop = &state.pipeline.crop;
-    (opts.edit_crop && *crop != Crop::None && crop.contains(xf.to_image(pos))).then_some(Target::CropMove)
+    (state.crop_overlay.editable() && *crop != Crop::None && crop.contains(xf.to_image(pos))).then_some(Target::CropMove)
 }
 
 fn apply_drag(target: Target, p: [f32; 2], delta: [f32; 2], snap: bool, state: &mut TrackerState) {
@@ -286,7 +297,10 @@ fn apply_drag(target: Target, p: [f32; 2], delta: [f32; 2], snap: bool, state: &
     }
 }
 
-fn draw_crop(painter: &Painter, xf: Xform, crop: &Crop, editing: bool) {
+fn draw_crop(painter: &Painter, xf: Xform, crop: &Crop, overlay: Overlay) {
+    if !overlay.visible {
+        return;
+    }
     let stroke = Stroke::new(1.5, CROP_COLOUR);
     let (Some(center), Some([hw, hh])) = (crop.center(), crop.half_extents()) else { return };
     let angle = crop.angle();
@@ -300,7 +314,7 @@ fn draw_crop(painter: &Painter, xf: Xform, crop: &Crop, editing: bool) {
             painter.add(Shape::closed_line(points, stroke));
         }
     }
-    if !editing {
+    if overlay.locked {
         return;
     }
     let c = xf.to_screen(center);
@@ -324,7 +338,7 @@ fn draw_crop(painter: &Painter, xf: Xform, crop: &Crop, editing: bool) {
     }
 }
 
-fn draw_ruler(painter: &Painter, xf: Xform, index: usize, ruler: &crate::config::Ruler) {
+fn draw_ruler(painter: &Painter, xf: Xform, index: usize, ruler: &crate::config::Ruler, locked: bool) {
     let (a, b) = (xf.to_screen(ruler.a), xf.to_screen(ruler.b));
     let stroke = Stroke::new(2.0, RULER_COLOUR);
     painter.line_segment([a, b], stroke);
@@ -332,7 +346,9 @@ fn draw_ruler(painter: &Painter, xf: Xform, index: usize, ruler: &crate::config:
     let normal = if dir.is_finite() { egui::vec2(-dir.y, dir.x) } else { egui::vec2(0.0, -1.0) };
     for p in [a, b] {
         painter.line_segment([p - normal * 7.0, p + normal * 7.0], stroke);
-        painter.circle(p, HANDLE_RADIUS - 1.5, Color32::WHITE, Stroke::new(1.0, Color32::BLACK));
+        if !locked {
+            painter.circle(p, HANDLE_RADIUS - 1.5, Color32::WHITE, Stroke::new(1.0, Color32::BLACK));
+        }
     }
     let mut text = format!("R{}  {:.1} px", index + 1, ruler.pixels());
     if ruler.length_cm > 0.0 {

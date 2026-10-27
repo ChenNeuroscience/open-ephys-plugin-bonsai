@@ -1,5 +1,6 @@
 //! Live view window: the latest frame with overlays (see `view`), plus a side panel of controls.
 
+mod icons;
 mod view;
 
 use std::sync::atomic::Ordering;
@@ -7,7 +8,7 @@ use std::sync::Arc;
 
 use eframe::egui::{self, RichText};
 
-use crate::config::{Crop, Ruler, TrackerState};
+use crate::config::{Crop, Overlay, PipelineConfig, Ruler, TrackerState};
 use crate::tracker::Shared;
 
 /// Used for sizing new shapes before the first frame has arrived.
@@ -73,13 +74,12 @@ struct TrackerApp {
     state: TrackerState,
     video: view::VideoView,
     highlight_threshold: bool,
-    edit_crop: bool,
 }
 
 impl TrackerApp {
     fn new(shared: Arc<Shared>) -> Self {
         let state = shared.state.lock().unwrap().clone();
-        TrackerApp { shared, state, video: Default::default(), highlight_threshold: true, edit_crop: false }
+        TrackerApp { shared, state, video: Default::default(), highlight_threshold: true }
     }
 
     fn image_size(&self) -> [f32; 2] {
@@ -135,21 +135,29 @@ impl TrackerApp {
 
     fn crop(&mut self, ui: &mut egui::Ui) {
         let image = self.image_size();
-        let crop = &mut self.state.pipeline.crop;
+        let TrackerState { pipeline: PipelineConfig { crop, .. }, crop_overlay: overlay, .. } = &mut self.state;
         let current = CropKind::of(crop);
         ui.horizontal_wrapped(|ui| {
             for (kind, name) in CropKind::ALL {
                 if ui.selectable_label(current == kind, name).clicked() && current != kind {
                     *crop = kind.convert(crop, image);
-                    self.edit_crop = kind != CropKind::None;
+                    *overlay = Overlay { visible: true, locked: false };
                 }
             }
         });
         if *crop == Crop::None {
             return;
         }
-        ui.toggle_value(&mut self.edit_crop, "Edit on image")
-            .on_hover_text("Drag inside to move, drag the handles to resize; the stalk handle rotates (hold shift to snap)");
+        ui.horizontal(|ui| {
+            icons::toggle(ui, &mut overlay.visible, icons::eye, "Show the whole frame and the crop outline, or hide them and mask out everything outside the crop");
+            icons::toggle(
+                ui,
+                &mut overlay.locked,
+                icons::padlock,
+                "Lock the crop so it can't be dragged. Unlocked: drag inside to move, drag the square handles to \
+                 resize, and the round handle on the stalk to rotate (hold shift to snap to 15°)",
+            );
+        });
 
         egui::Grid::new("crop").num_columns(2).show(ui, |ui| {
             match crop {
@@ -197,9 +205,10 @@ impl TrackerApp {
             if ui.button("Add ruler").clicked() {
                 let y = image[1] / 2.0 + 20.0 * (cal.rulers.len() % 8) as f32;
                 cal.rulers.push(Ruler { a: [image[0] / 3.0, y], b: [image[0] * 2.0 / 3.0, y], length_cm: 0.0 });
-                cal.show_rulers = true;
+                cal.overlay = Overlay { visible: true, locked: false };
             }
-            ui.checkbox(&mut cal.show_rulers, "Show rulers");
+            icons::toggle(ui, &mut cal.overlay.visible, icons::eye, "Show or hide the rulers (they still count towards px/m)");
+            icons::toggle(ui, &mut cal.overlay.locked, icons::padlock, "Lock the rulers so they can't be dragged");
         });
 
         let mut remove = None;
@@ -257,7 +266,7 @@ impl TrackerApp {
             egui::ScrollArea::vertical().show(ui, |ui| self.controls(ui));
         });
         let latest = self.shared.latest.lock().unwrap().clone();
-        let options = view::Options { highlight_threshold: self.highlight_threshold, edit_crop: self.edit_crop };
+        let options = view::Options { highlight_threshold: self.highlight_threshold };
         egui::CentralPanel::default().show(ui, |ui| self.video.show(ui, &mut self.state, latest.as_deref(), options));
 
         if self.state != before {
@@ -279,8 +288,7 @@ mod tests {
     use crate::tracker::View;
 
     /// Renders the whole window. Run with UPDATE_SNAPSHOTS=1 to accept changes; see tests/snapshots/.
-    #[test]
-    fn window_snapshot() {
+    fn window_snapshot(name: &str, configure: impl FnOnce(&mut TrackerState)) {
         let frame = SyntheticCamera::new(640, 480, 1000.0).next_frame().unwrap().unwrap();
         let mut state = TrackerState::default();
         state.pipeline.crop = Crop::Rectangle { center: [330.0, 250.0], width: 420.0, height: 300.0, angle: 0.3 };
@@ -288,14 +296,44 @@ mod tests {
             Ruler { a: [120.0, 420.0], b: [480.0, 420.0], length_cm: 100.0 },
             Ruler { a: [560.0, 80.0], b: [560.0, 260.0], length_cm: 0.0 },
         ];
+        configure(&mut state);
         let blobs = crate::pipeline::Pipeline::default().process(&frame.image, &state.pipeline);
         let shared = Arc::new(Shared { state: state.into(), ..Default::default() });
         *shared.latest.lock().unwrap() = Some(Arc::new(View { frame, blobs }));
 
         let mut app = TrackerApp::new(shared);
-        app.edit_crop = true;
         let mut harness = egui_kittest::Harness::builder().with_size([1150.0, 650.0]).wgpu().build_ui(|ui| app.show(ui));
         harness.run();
-        harness.snapshot("tracker_window");
+        harness.snapshot(name);
+    }
+
+    #[test]
+    fn window_crop_editable_rulers_locked() {
+        window_snapshot("tracker_window", |s| s.calibration.overlay.locked = true);
+    }
+
+    #[test]
+    fn window_crop_hidden() {
+        window_snapshot("tracker_window_crop_hidden", |s| s.crop_overlay.visible = false);
+    }
+
+    #[test]
+    fn icons_snapshot() {
+        let mut values = [true, false, true, false];
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size([120.0, 30.0])
+            .with_pixels_per_point(3.0)
+            .wgpu()
+            .build_ui(|ui| {
+                ui.horizontal(|ui| {
+                    let [a, b, c, d] = &mut values;
+                    icons::toggle(ui, a, icons::eye, "");
+                    icons::toggle(ui, b, icons::eye, "");
+                    icons::toggle(ui, c, icons::padlock, "");
+                    icons::toggle(ui, d, icons::padlock, "");
+                });
+            });
+        harness.run();
+        harness.snapshot("icons");
     }
 }
