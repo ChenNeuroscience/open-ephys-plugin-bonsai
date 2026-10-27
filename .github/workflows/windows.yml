@@ -17,6 +17,8 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# CMake isn't given a generator, so it uses the newest Visual Studio on the runner image (which changes
+# as GitHub updates windows-latest).
 jobs:
 
   build-windows:
@@ -32,7 +34,7 @@ jobs:
         cd ../..
         git clone https://github.com/open-ephys/plugin-GUI.git --branch main
         cd plugin-GUI/Build
-        cmake -G "Visual Studio 17 2022" -A x64 ..
+        cmake -A x64 ..
         mkdir Release && cd Release
         curl -L https://openephys.jfrog.io/artifactory/GUI-binaries/Libraries/open-ephys-lib-v1.0.0.zip --output open-ephys-lib.zip
         unzip open-ephys-lib.zip
@@ -52,7 +54,7 @@ jobs:
     - name: configure
       run: |
         cd Build
-        cmake -G "Visual Studio 17 2022" -A x64 ..
+        cmake -A x64 ..
       shell: bash
     - name: build
       run: |
