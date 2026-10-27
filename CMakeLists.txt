@@ -8,7 +8,11 @@ if (NOT DEFINED GUI_BASE_DIR)
 endif()
 
 set(CMAKE_OSX_DEPLOYMENT_TARGET "10.15" CACHE STRING "Minimum OS X deployment version" FORCE)
-set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "Build architecture for Mac OS X" FORCE)
+# Single architecture: the Rust tracker (via Corrosion) can't build universal binaries. Must match the GUI process.
+if (APPLE AND NOT DEFINED CMAKE_OSX_ARCHITECTURES)
+	execute_process(COMMAND uname -m OUTPUT_VARIABLE HOST_ARCH OUTPUT_STRIP_TRAILING_WHITESPACE)
+	set(CMAKE_OSX_ARCHITECTURES "${HOST_ARCH}" CACHE STRING "Build architecture for Mac OS X")
+endif()
 
 get_filename_component(PROJECT_FOLDER ${CMAKE_CURRENT_SOURCE_DIR} ABSOLUTE)
 get_filename_component(PLUGIN_NAME ${PROJECT_FOLDER} NAME)
@@ -98,11 +102,20 @@ foreach( src_file IN ITEMS ${SRC_FILES})
 	source_group("${group_name}" FILES "${src_file}")
 endforeach()
 
-#additional libraries, if needed
-#find_package(LIBNAME)
-#or
-#find_library(LIBNAME_LIBRARIES NAMES libname)
-#find_path(LIBNAME_INCLUDE_DIRS includefile.h)
-#
-#target_link_libraries(${PLUGIN_NAME} ${LIBNAME_LIBRARIES})
-#target_include_directories(${PLUGIN_NAME} PRIVATE ${LIBNAME_INCLUDE_DIRS})
+#Rust tracker library (tracker/), built by cargo via Corrosion and linked statically.
+#Needs a Rust toolchain (rustup) with the target(s) for this build, e.g. on Mac for a
+#universal build: rustup target add x86_64-apple-darwin aarch64-apple-darwin
+if (APPLE)
+	if (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
+		set(Rust_CARGO_TARGET aarch64-apple-darwin)
+	elseif (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
+		set(Rust_CARGO_TARGET x86_64-apple-darwin)
+	else()
+		message(FATAL_ERROR "CMAKE_OSX_ARCHITECTURES must be a single architecture (arm64 or x86_64), got: ${CMAKE_OSX_ARCHITECTURES}")
+	endif()
+endif()
+include(FetchContent)
+FetchContent_Declare(Corrosion GIT_REPOSITORY https://github.com/corrosion-rs/corrosion.git GIT_TAG v0.6.1)
+FetchContent_MakeAvailable(Corrosion)
+corrosion_import_crate(MANIFEST_PATH ${CMAKE_CURRENT_SOURCE_DIR}/tracker/Cargo.toml CRATES tracker CRATE_TYPES staticlib PROFILE release)
+target_link_libraries(${PLUGIN_NAME} tracker)

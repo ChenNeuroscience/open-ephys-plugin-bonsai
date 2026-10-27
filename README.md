@@ -1,5 +1,18 @@
 # Open Ephys (v1) Plugin - Bonsai
 
+> **`rust-tracker` branch:** the OSC/Bonsai input is replaced by an in-process Rust camera tracker
+> (`tracker/`), which captures frames, finds the two LEDs and opens its own live-view window during
+> acquisition (Windows; on macOS it runs headless, so use `tracker-dev`). See [PLAN.md](PLAN.md). Quick start:
+>
+> ```bash
+> python3 tools/fake_camera.py                       # fake camera on 127.0.0.1:27030 (stdlib only)
+> cd tracker && cargo run --release --bin tracker-dev  # standalone window + sample printout
+> cargo test --release -- --include-ignored            # unit tests + end-to-end test vs fake_camera.py
+> ```
+>
+> Building the plugin now also needs a Rust toolchain (https://rustup.rs); CMake fetches
+> [Corrosion](https://github.com/corrosion-rs/corrosion) to drive cargo. The channel layout is unchanged.
+
 
 <img width="291" height="157" alt="Screenshot 2025-07-11 at 00 42 37" src="https://github.com/user-attachments/assets/2f920dce-3caf-465e-9eb0-74358f9c16b2" />
 

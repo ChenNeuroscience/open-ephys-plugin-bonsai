@@ -30,9 +30,13 @@
 
 namespace Bonsai {
 
-    constexpr size_t DEFAULT_OSC_PORT = 27020;
-    constexpr char DEFAULT_OSC_ADDRESS[] = "/bonsai";
+    // timestamp channel, then x1, y1, x2, y2, area1, area2 (see tracker/include/tracker.h)
+    constexpr int NUM_VALUES = 6;
+    constexpr int NUM_CHANNELS = NUM_VALUES + 1;
+    constexpr int POLL_MAX_SAMPLES = 64;
+    constexpr uint32_t POLL_TIMEOUT_MS = 20;
 
+    const Array<String> CAMERA_KINDS = { "fake", "synthetic" };
 
 
     DataThreadPlugin::DataThreadPlugin(SourceNode* sn) : DataThread(sn), sourceNode(sn)
@@ -41,16 +45,17 @@ namespace Bonsai {
 
 
     DataThreadPlugin::~DataThreadPlugin()
-    {  
+    {
+        tracker_stop(tracker);
     }
 
     void DataThreadPlugin::registerParameters()
     {
-        addIntParameter(Parameter::PROCESSOR_SCOPE, "port", "Port", "Bonsai OSC port", DEFAULT_OSC_PORT, 1024, 49151, true);
-        addStringParameter(Parameter::PROCESSOR_SCOPE, "address", "Address", "Bonsai source OSC address", DEFAULT_OSC_ADDRESS, true);
-        addBooleanParameter(Parameter::PROCESSOR_SCOPE, "timestamp", "Timestamp", "First value within message is timestamp", true, true);
-        addIntParameter(Parameter::PROCESSOR_SCOPE, "values", "Values", "Number of values within messages (after timestamp)", 6, 1, 8, true);
-        addIntParameter(Parameter::PROCESSOR_SCOPE, "sample_rate","Sample Rate", "Sample Rate (Hz) to show on data stream.", 50, 1, 1000, true);
+        addCategoricalParameter(Parameter::PROCESSOR_SCOPE, "camera", "Camera", "Camera source (fake = tools/fake_camera.py over TCP)", CAMERA_KINDS, 0, true);
+        addStringParameter(Parameter::PROCESSOR_SCOPE, "camera_address", "Address", "host:port of the fake camera", "127.0.0.1:27030", true);
+        addIntParameter(Parameter::PROCESSOR_SCOPE, "threshold", "Threshold", "Initial brightness threshold (0-255); adjust live in the tracker window", 200, 0, 255, true);
+        addBooleanParameter(Parameter::PROCESSOR_SCOPE, "show_window", "Window", "Open the tracker window during acquisition (not supported on macOS)", true, true);
+        addIntParameter(Parameter::PROCESSOR_SCOPE, "sample_rate","Sample Rate", "Sample Rate (Hz) to show on data stream; should match the camera frame rate.", 50, 1, 1000, true);
     }
     
     void DataThreadPlugin::parameterValueChanged (Parameter* parameter)
@@ -58,10 +63,45 @@ namespace Bonsai {
         CoreServices::updateSignalChain(sourceNode);
     }
 
+    String DataThreadPlugin::buildTrackerConfig()
+    {
+        auto* camera = new DynamicObject();
+        String kind = static_cast<CategoricalParameter*>(getParameter("camera"))->getSelectedString();
+        camera->setProperty("kind", kind);
+        if (kind == "fake") {
+            camera->setProperty("address", getParameter("camera_address")->getValueAsString());
+        } else {
+            camera->setProperty("width", 1024);
+            camera->setProperty("height", 768);
+            camera->setProperty("fps", (int) getParameter("sample_rate")->getValue());
+        }
+
+        auto* pipeline = new DynamicObject();
+        pipeline->setProperty("threshold", (int) getParameter("threshold")->getValue());
+
+        auto* config = new DynamicObject();
+        config->setProperty("camera", var(camera));
+        config->setProperty("pipeline", var(pipeline));
+        config->setProperty("show_window", (bool) getParameter("show_window")->getValue());
+        return JSON::toString(var(config), true);
+    }
+
 
     bool DataThreadPlugin::updateBuffer()
     {
-        return true; // we don't actually use the updateBuffer method in this case, rather data is written within OSCServer.ProcessMessage()
+        // Called in a loop by DataThread::run(); tracker_poll blocks briefly so this doesn't spin.
+        TrackerSample samples[POLL_MAX_SAMPLES];
+        int64_t n = tracker_poll(tracker, samples, POLL_MAX_SAMPLES, POLL_TIMEOUT_MS);
+        if (n < 0) {
+            LOGE("Tracker capture thread stopped unexpectedly.");
+            return false;
+        }
+        for (int64_t i = 0; i < n; i++) {
+            if (!sampleWriter->write(samples[i].timestamp, samples[i].values)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     bool DataThreadPlugin::foundInputSource()
@@ -71,59 +111,57 @@ namespace Bonsai {
 
     bool DataThreadPlugin::startAcquisition()
     {
-        if (server && server->IsBound()) {
-            LOGE("OSC Server should not be running yet when calling startAcquisition(), but it is.");
+        if (tracker) {
+            LOGE("Tracker should not be running yet when calling startAcquisition(), but it is.");
             return false;
         }
         if (!sourceBuffers.getFirst()) {
-            LOGE("sourceBuffer should be allocated when calling startAcquisition(), but it is.");
+            LOGE("sourceBuffer should be allocated when calling startAcquisition(), but it isn't.");
             return false;
         }
         sourceBuffers.getFirst()->clear();
 
-        bool hasTimestamp = getParameter("timestamp")->getValue();
-        int sampleRate = getParameter("sample_rate")->getValue();
-        qualityInfo.initialise(sampleRate, hasTimestamp);
+        qualityInfo.initialise(getParameter("sample_rate")->getValue(), true);
+        sampleWriter = std::make_unique<SampleWriter>(sourceBuffers.getFirst(), NUM_VALUES, qualityInfo);
 
-        server = std::make_unique<OSCServer>(
-            getParameter("port")->getValue(),
-            getParameter("address")->getValue(),
-            sourceBuffers.getFirst(),
-            hasTimestamp,
-            getParameter("values")->getValue(),
-            qualityInfo
-        );
-
-        if (!server || !server->IsBound()) {
+        String config = buildTrackerConfig();
+        LOGC("Starting tracker with config: ", config);
+        char error[512] = {};
+        tracker = tracker_start(config.toRawUTF8(), error, sizeof(error));
+        if (!tracker) {
+            LOGE("Failed to start tracker: ", error);
+            CoreServices::sendStatusMessage("Tracker failed to start!");
             return false;
         }
-        startThread(); // will call run() on this class, which in turn calls server->run()
-        return true;
-    }
 
-    void DataThreadPlugin::run()
-    {
-        // this function is called by the base JUCE Thread class, on a dedicated thread
-        if (!server) {
-            LOGE("OSC server not created yet.");
-            return;
-        }
-        server->run();
+        startThread(); // DataThread::run() calls updateBuffer() until stopped
+        return true;
     }
 
     bool DataThreadPlugin::stopAcquisition()
     {
-        if (!server || !server->IsBound()) {
-            LOGE("OSC Server should be running when calling stopAcquisition(), but it isn't.");
+        if (!tracker) {
+            LOGE("Tracker should be running when calling stopAcquisition(), but it isn't.");
             return false;
         }
-        server->stop();
         if (!stopThread(500)) {
             return false;
         }
-        server = nullptr;
+        tracker_stop(tracker);
+        tracker = nullptr;
+        sampleWriter = nullptr;
         sourceBuffers.getFirst()->clear();
         return true;
+    }
+
+    String DataThreadPlugin::getTrackerStatus()
+    {
+        if (!tracker) {
+            return {};
+        }
+        char status[256] = {};
+        tracker_status(tracker, status, sizeof(status));
+        return String::fromUTF8(status);
     }
 
 
@@ -134,8 +172,8 @@ namespace Bonsai {
         OwnedArray<DeviceInfo>* devices,
         OwnedArray<ConfigurationObject>* configurationObjects)
     {
-        if (server && server->IsBound()) {
-            LOGE("OSC Server should not be running when updating Settings, but it is.");
+        if (tracker) {
+            LOGE("Tracker should not be running when updating Settings, but it is.");
             return;
         }
 
@@ -146,27 +184,20 @@ namespace Bonsai {
         int sampleRate = getParameter("sample_rate")->getValue();
         DataStream* stream = new DataStream({
            "bonsai",
-           "float32 values from bonsai over UDP/OSC",
+           "LED positions from the camera tracker",
            "bonsai",
            static_cast<float>(sampleRate),
         });
 
         sourceStreams->add(stream);
 
-        int messageNumValues = getParameter("values")->getValue();
-        bool hasTimestamp = getParameter("timestamp")->getValue();
+        sourceBuffers.add(new DataBuffer(NUM_CHANNELS, 1024));
 
-        if (hasTimestamp) {
-            messageNumValues++;
-        }
-
-        sourceBuffers.add(new DataBuffer(messageNumValues, 1024));
-
-        for (int i = 0; i < messageNumValues; i++) {
+        for (int i = 0; i < NUM_CHANNELS; i++) {
             continuousChannels->add(new ContinuousChannel({
                 ContinuousChannel::Type::AUX,
                 "BONS" + std::to_string(i+1),
-                i == 0 && hasTimestamp ? "float32 timestamp from bonsai" : "float32 value from bonsai",
+                i == 0 ? "float32 camera timestamp (s, relative to first frame)" : "float32 value from tracker",
                 "BONS" + std::to_string(i+1),
                 6.,  // channel bitvolts scaling, not especially relevant here
                 stream

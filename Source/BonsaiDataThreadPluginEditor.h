@@ -53,7 +53,7 @@ namespace Bonsai {
 
 
 
-	class DataThreadPluginEditor : public GenericEditor
+	class DataThreadPluginEditor : public GenericEditor, Timer
 	{
 	public:
 		/** The class constructor, used to initialize any members. */
@@ -62,12 +62,17 @@ namespace Bonsai {
 		/** The class destructor, used to deallocate memory */
 		~DataThreadPluginEditor();
 
+		/** Refreshes the tracker status line */
+		void timerCallback() override;
+
 	private:
 
 		/** A pointer to the underlying DataThreadPlugin */
     	DataThreadPlugin* thread;
 
         SampleQualityComponent sampleQualityComponent;
+
+        Label statusLabel;
 
     };
 

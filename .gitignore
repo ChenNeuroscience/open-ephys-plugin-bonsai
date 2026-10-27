@@ -17,3 +17,6 @@ OE_PLUGIN_open-ephys-plugin-bonsai.xcodeproj
 Release
 cmake_install.cmake
 CMakeCache.txt
+
+# Rust
+tracker/target

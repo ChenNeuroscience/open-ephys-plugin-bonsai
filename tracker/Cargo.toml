@@ -1,0 +1,28 @@
+[package]
+name = "tracker"
+version = "0.1.0"
+edition = "2021"
+description = "Camera capture, LED tracking and live view for the Open Ephys bonsai plugin"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[[bin]]
+name = "tracker-dev"
+path = "src/bin/tracker-dev.rs"
+
+[dependencies]
+crossbeam-channel = "0.5"
+eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "x11", "wayland"] }
+image = { version = "0.25", default-features = false }
+imageproc = { version = "0.27", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+winit = "0.30"

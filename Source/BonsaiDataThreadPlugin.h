@@ -25,13 +25,9 @@
 #define DATATHREADPLUGIN_H_DEFINED
 
 #include <DataThreadHeaders.h>
-#include "oscpack/osc/OscOutboundPacketStream.h"
-#include "oscpack/ip/IpEndpointName.h"
-#include "oscpack/osc/OscReceivedElements.h"
-#include "oscpack/osc/OscPacketListener.h"
-#include "oscpack/ip/UdpSocket.h"
-#include "OSCServer.h"
 #include "QualityInfo.h"
+#include "SampleWriter.h"
+#include "../tracker/include/tracker.h"
 
 namespace Bonsai {
 
@@ -87,9 +83,10 @@ namespace Bonsai {
         /** Allows the DataThread plugin to handle a config message while acquisition is not active */
         String handleConfigMessage (const String& msg) override;
 
-        void run() override;
+        /** Status line from the tracker, for the editor (empty when not acquiring). Message thread only. */
+        String getTrackerStatus();
 
-        /* Reference to this is provided to the server and the sampleQualityComponent within the editor. Uses a lock
+        /* Reference to this is provided to the sample writer and the sampleQualityComponent within the editor. Uses a lock
            for simplicity. */
         QualityInfo qualityInfo;
 
@@ -100,7 +97,11 @@ namespace Bonsai {
         void parameterValueChanged (Parameter* parameter) override;
 
 private:
-    std::unique_ptr<OSCServer> server;
+    /** JSON config for the Rust tracker, see tracker/src/config.rs */
+    String buildTrackerConfig();
+
+    TrackerHandle* tracker = nullptr;
+    std::unique_ptr<SampleWriter> sampleWriter;
 
     SourceNode* sourceNode;
 
