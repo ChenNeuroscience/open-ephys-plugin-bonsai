@@ -73,13 +73,12 @@ struct TrackerApp {
     /// Local copy, written back to `shared` whenever it changes.
     state: TrackerState,
     video: view::VideoView,
-    highlight_threshold: bool,
 }
 
 impl TrackerApp {
     fn new(shared: Arc<Shared>) -> Self {
         let state = shared.state.lock().unwrap().clone();
-        TrackerApp { shared, state, video: Default::default(), highlight_threshold: true }
+        TrackerApp { shared, state, video: Default::default() }
     }
 
     fn image_size(&self) -> [f32; 2] {
@@ -91,10 +90,41 @@ impl TrackerApp {
         ui.label(self.shared.status.lock().unwrap().as_str());
         ui.add_space(4.0);
 
-        egui::CollapsingHeader::new("Stats").default_open(true).show(ui, |ui| self.stats(ui));
-        egui::CollapsingHeader::new("Detection").default_open(true).show(ui, |ui| self.detection(ui));
-        egui::CollapsingHeader::new("Crop").default_open(true).show(ui, |ui| self.crop(ui));
-        egui::CollapsingHeader::new("Calibration").default_open(true).show(ui, |ui| self.calibration(ui));
+        egui::CollapsingHeader::new(RichText::new("Stats").strong()).default_open(true).show(ui, |ui| self.stats(ui));
+
+        let mut overlay = self.state.detection_overlay;
+        section(
+            ui,
+            "Detection",
+            &mut overlay,
+            "Highlight pixels above the threshold and circle the detected regions",
+            "Lock the detection settings",
+            |ui| self.detection(ui),
+        );
+        self.state.detection_overlay = overlay;
+
+        let mut overlay = self.state.crop_overlay;
+        section(
+            ui,
+            "Crop",
+            &mut overlay,
+            "Show the whole frame with the crop outline, or hide it and mask out everything outside the crop",
+            "Lock the crop. Unlocked: drag inside to move, drag the square handles to resize, and the round \
+             handle on the stalk to rotate (hold shift to snap to 15°)",
+            |ui| self.crop(ui),
+        );
+        self.state.crop_overlay = overlay;
+
+        let mut overlay = self.state.calibration.overlay;
+        section(
+            ui,
+            "Calibration",
+            &mut overlay,
+            "Show or hide the rulers (they still count towards px/m)",
+            "Lock the rulers so they can't be dragged or edited",
+            |ui| self.calibration(ui),
+        );
+        self.state.calibration.overlay = overlay;
     }
 
     fn stats(&mut self, ui: &mut egui::Ui) {
@@ -115,9 +145,11 @@ impl TrackerApp {
     }
 
     fn detection(&mut self, ui: &mut egui::Ui) {
+        if self.state.detection_overlay.locked {
+            ui.disable();
+        }
         let p = &mut self.state.pipeline;
         ui.add(egui::Slider::new(&mut p.threshold, 0..=255).text("threshold"));
-        ui.checkbox(&mut self.highlight_threshold, "Highlight above threshold");
         ui.horizontal(|ui| {
             ui.label("Min area");
             ui.add(egui::DragValue::new(&mut p.min_area).range(0..=100_000).suffix(" px"));
@@ -136,6 +168,9 @@ impl TrackerApp {
     fn crop(&mut self, ui: &mut egui::Ui) {
         let image = self.image_size();
         let TrackerState { pipeline: PipelineConfig { crop, .. }, crop_overlay: overlay, .. } = &mut self.state;
+        if overlay.locked {
+            ui.disable();
+        }
         let current = CropKind::of(crop);
         ui.horizontal_wrapped(|ui| {
             for (kind, name) in CropKind::ALL {
@@ -144,19 +179,6 @@ impl TrackerApp {
                     *overlay = Overlay { visible: true, locked: false };
                 }
             }
-        });
-        if *crop == Crop::None {
-            return;
-        }
-        ui.horizontal(|ui| {
-            icons::toggle(ui, &mut overlay.visible, icons::eye, "Show the whole frame and the crop outline, or hide them and mask out everything outside the crop");
-            icons::toggle(
-                ui,
-                &mut overlay.locked,
-                icons::padlock,
-                "Lock the crop so it can't be dragged. Unlocked: drag inside to move, drag the square handles to \
-                 resize, and the round handle on the stalk to rotate (hold shift to snap to 15°)",
-            );
         });
 
         egui::Grid::new("crop").num_columns(2).show(ui, |ui| {
@@ -201,15 +223,15 @@ impl TrackerApp {
                 ui.weak("Not calibrated: add a ruler, drag its ends onto something of known size and enter its length.");
             }
         }
-        ui.horizontal(|ui| {
-            if ui.button("Add ruler").clicked() {
-                let y = image[1] / 2.0 + 20.0 * (cal.rulers.len() % 8) as f32;
-                cal.rulers.push(Ruler { a: [image[0] / 3.0, y], b: [image[0] * 2.0 / 3.0, y], length_cm: 0.0 });
-                cal.overlay = Overlay { visible: true, locked: false };
-            }
-            icons::toggle(ui, &mut cal.overlay.visible, icons::eye, "Show or hide the rulers (they still count towards px/m)");
-            icons::toggle(ui, &mut cal.overlay.locked, icons::padlock, "Lock the rulers so they can't be dragged");
-        });
+        // Only the editing controls below are disabled when locked; the readout above stays prominent.
+        if cal.overlay.locked {
+            ui.disable();
+        }
+        if ui.button("Add ruler").clicked() {
+            let y = image[1] / 2.0 + 20.0 * (cal.rulers.len() % 8) as f32;
+            cal.rulers.push(Ruler { a: [image[0] / 3.0, y], b: [image[0] * 2.0 / 3.0, y], length_cm: 0.0 });
+            cal.overlay.visible = true;
+        }
 
         let mut remove = None;
         egui::Grid::new("rulers").num_columns(4).striped(true).show(ui, |ui| {
@@ -228,6 +250,28 @@ impl TrackerApp {
             cal.rulers.remove(i);
         }
     }
+}
+
+/// A collapsible section whose header carries eye (overlay visibility) and padlock (lock) toggles.
+/// Locking stops the overlay being dragged on the video; each section also disables its own controls.
+fn section(
+    ui: &mut egui::Ui,
+    title: &str,
+    overlay: &mut Overlay,
+    eye_tip: &str,
+    lock_tip: &str,
+    body: impl FnOnce(&mut egui::Ui),
+) {
+    let id = ui.make_persistent_id(title);
+    egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true)
+        .show_header(ui, |ui| {
+            ui.label(RichText::new(title).strong());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                icons::toggle(ui, &mut overlay.locked, icons::padlock, lock_tip);
+                icons::toggle(ui, &mut overlay.visible, icons::eye, eye_tip);
+            });
+        })
+        .body(body);
 }
 
 fn center_row(ui: &mut egui::Ui, center: &mut [f32; 2]) {
@@ -266,8 +310,7 @@ impl TrackerApp {
             egui::ScrollArea::vertical().show(ui, |ui| self.controls(ui));
         });
         let latest = self.shared.latest.lock().unwrap().clone();
-        let options = view::Options { highlight_threshold: self.highlight_threshold };
-        egui::CentralPanel::default().show(ui, |ui| self.video.show(ui, &mut self.state, latest.as_deref(), options));
+        egui::CentralPanel::default().show(ui, |ui| self.video.show(ui, &mut self.state, latest.as_deref()));
 
         if self.state != before {
             *self.shared.state.lock().unwrap() = self.state.clone();
@@ -310,6 +353,11 @@ mod tests {
     #[test]
     fn window_crop_editable_rulers_locked() {
         window_snapshot("tracker_window", |s| s.calibration.overlay.locked = true);
+    }
+
+    #[test]
+    fn window_detection_hidden() {
+        window_snapshot("tracker_window_detection_hidden", |s| s.detection_overlay.visible = false);
     }
 
     #[test]

@@ -24,14 +24,17 @@ plugin so existing analysis code keeps working.
 
 While acquisition runs, a tracker window shows the live video with:
 
-- **Detection**: brightness threshold (pixels above it can be highlighted), min/max region area.
+- **Detection**: brightness threshold and min/max region area. The eye highlights above-threshold pixels
+  and circles the two detected regions.
 - **Crop**: none, circle, square or rectangle. Drag to move, use the handles to resize, and use the stalk to
   rotate (shift snaps to 15°). The eye shows the whole frame with the crop outline, or hides it and masks
-  out everything outside the crop. The padlock stops it being dragged.
+  out everything outside the crop.
 - **Calibration**: rulers you drag onto things of known size and give a length in cm. The mean pixels per
-  metre is shown in the panel and over the video, even while the rulers are hidden (eye) or locked
-  (padlock).
+  metre is shown in the panel and over the video, even while the rulers are hidden.
 - Stats: frame rate, processing time, dropped frames.
+
+The eye and padlock sit in each section's header. The padlock locks that section's controls and stops its
+overlay being dragged on the video.
 
 These settings are saved with the Open Ephys signal chain.
 

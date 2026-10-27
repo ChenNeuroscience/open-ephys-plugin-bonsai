@@ -25,11 +25,6 @@ const ROTATE_STALK: f32 = 28.0;
 const MIN_SIZE: f32 = 4.0;
 const ROTATE_SNAP: f32 = 15.0 * PI / 180.0;
 
-#[derive(Clone, Copy)]
-pub struct Options {
-    pub highlight_threshold: bool,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Target {
     CropMove,
@@ -86,12 +81,12 @@ pub struct VideoView {
 }
 
 impl VideoView {
-    pub fn show(&mut self, ui: &mut egui::Ui, state: &mut TrackerState, view: Option<&View>, opts: Options) {
+    pub fn show(&mut self, ui: &mut egui::Ui, state: &mut TrackerState, view: Option<&View>) {
         let Some(view) = view else {
             ui.centered_and_justified(|ui| ui.label("No frames yet"));
             return;
         };
-        self.update_texture(ui.ctx(), view, state, opts.highlight_threshold);
+        self.update_texture(ui.ctx(), view, state);
         let Some(texture) = &self.texture else { return };
 
         // Fit the frame in the available space, preserving aspect ratio.
@@ -112,7 +107,8 @@ impl VideoView {
                 draw_ruler(&painter, xf, i, ruler, rulers.locked);
             }
         }
-        for (blob, colour) in view.blobs.iter().zip(BLOB_COLOURS) {
+        let blobs = if state.detection_overlay.visible { view.blobs.as_slice() } else { &[] };
+        for (blob, colour) in blobs.iter().zip(BLOB_COLOURS) {
             let r = (blob.area as f32 / PI).sqrt() * scale + 4.0;
             // Centroids are in pixel indices; +0.5 puts them at pixel centres on screen.
             painter.circle_stroke(xf.to_screen([blob.x + 0.5, blob.y + 0.5]), r, Stroke::new(2.0, colour));
@@ -124,8 +120,9 @@ impl VideoView {
 
     /// Inside the crop: the frame, with above-threshold pixels highlighted. Outside: the plain frame while the
     /// crop overlay is visible, masked to black when it's hidden.
-    fn update_texture(&mut self, ctx: &egui::Context, view: &View, state: &TrackerState, highlight: bool) {
+    fn update_texture(&mut self, ctx: &egui::Context, view: &View, state: &TrackerState) {
         let pipeline = &state.pipeline;
+        let highlight = state.detection_overlay.visible;
         let crop_visible = state.crop_overlay.visible;
         let key = TextureKey {
             frame: view.frame.id,

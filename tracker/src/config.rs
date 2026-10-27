@@ -18,6 +18,8 @@ pub struct Config {
 #[serde(default)]
 pub struct TrackerState {
     pub pipeline: PipelineConfig,
+    /// Visible: above-threshold pixels are highlighted and detected regions circled. Locked: settings can't be changed.
+    pub detection_overlay: Overlay,
     /// Hidden: the outside of the crop is masked out. Visible: the whole frame is shown with the crop outline.
     pub crop_overlay: Overlay,
     pub calibration: Calibration,
