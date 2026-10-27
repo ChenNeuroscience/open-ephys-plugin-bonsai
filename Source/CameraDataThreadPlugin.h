@@ -29,7 +29,7 @@
 #include "SampleWriter.h"
 #include "../tracker/include/tracker.h"
 
-namespace Bonsai {
+namespace CameraTracker {
 
     class DataThreadPlugin : public DataThread
     {
@@ -110,5 +110,5 @@ private:
 
 };
 
-} // namespace Bonsai
+} // namespace CameraTracker
 #endif

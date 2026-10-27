@@ -4,7 +4,7 @@
 #include <DataThreadHeaders.h>
 #include "QualityInfo.h"
 
-namespace Bonsai {
+namespace CameraTracker {
 
     /*
       Writes timestamped samples into the DataBuffer, "smoothing" them onto the nominal sample rate:

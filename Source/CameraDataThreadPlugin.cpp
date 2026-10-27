@@ -21,14 +21,14 @@
 
  */
 
-#include "BonsaiDataThreadPlugin.h"
+#include "CameraDataThreadPlugin.h"
 
-#include "BonsaiDataThreadPluginEditor.h"
+#include "CameraDataThreadPluginEditor.h"
 
 #include <ProcessorHeaders.h>
 
 
-namespace Bonsai {
+namespace CameraTracker {
 
     // timestamp channel, then x1, y1, x2, y2, area1, area2 (see tracker/include/tracker.h)
     constexpr int NUM_VALUES = 6;
@@ -200,6 +200,8 @@ namespace Bonsai {
         continuousChannels->clear();
 
         int sampleRate = getParameter("sample_rate")->getValue();
+        // Stream, channel and event identifiers keep their original "bonsai"/"BONS" names so existing
+        // recordings and downstream readers stay compatible.
         DataStream* stream = new DataStream({
            "bonsai",
            "LED positions from the camera tracker",
@@ -226,7 +228,7 @@ namespace Bonsai {
         // we don't currently use the event channel for anything but the RecordEngine requires one (or it crashes on startup)
         eventChannels->add(new EventChannel({
             EventChannel::Type::TTL,
-            "Bonsai Event Channel",
+            "Camera Event Channel",
             "Dummy channel, required for RecordEngine to not crash",
             "bonsai_ttl_events",
             stream,

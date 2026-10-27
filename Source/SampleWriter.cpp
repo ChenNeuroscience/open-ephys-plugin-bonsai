@@ -1,6 +1,6 @@
 #include "SampleWriter.h"
 
-namespace Bonsai {
+namespace CameraTracker {
 
     // Gaps longer than this many samples are treated as a lost source rather than filled.
     constexpr double maxGapSamples = 1000;

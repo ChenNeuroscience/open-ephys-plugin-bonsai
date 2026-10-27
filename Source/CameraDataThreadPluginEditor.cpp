@@ -21,11 +21,11 @@
 
  */
 
-#include "BonsaiDataThreadPluginEditor.h"
+#include "CameraDataThreadPluginEditor.h"
 
 
 
-namespace Bonsai {
+namespace CameraTracker {
 	DataThreadPluginEditor::DataThreadPluginEditor(GenericProcessor* parentNode, DataThreadPlugin* thread, QualityInfo& qualityInfo)
 		: GenericEditor(parentNode), sampleQualityComponent(qualityInfo)
 	{

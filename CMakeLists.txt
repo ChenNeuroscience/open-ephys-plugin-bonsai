@@ -14,8 +14,7 @@ if (APPLE AND NOT DEFINED CMAKE_OSX_ARCHITECTURES)
 	set(CMAKE_OSX_ARCHITECTURES "${HOST_ARCH}" CACHE STRING "Build architecture for Mac OS X")
 endif()
 
-get_filename_component(PROJECT_FOLDER ${CMAKE_CURRENT_SOURCE_DIR} ABSOLUTE)
-get_filename_component(PLUGIN_NAME ${PROJECT_FOLDER} NAME)
+set(PLUGIN_NAME open-ephys-plugin-camera)
 
 project(OE_PLUGIN_${PLUGIN_NAME})
 set(CMAKE_SHARED_LIBRARY_PREFIX "")

@@ -1,4 +1,4 @@
-//! Mirrors the Bonsai workflow: Grayscale → Crop → Threshold → FindContours →
+//! Mirrors the original Bonsai workflow this replaced: Grayscale → Crop → Threshold → FindContours →
 //! BinaryRegionAnalysis → SortBinaryRegions, reduced to the two largest blobs.
 
 use image::{GrayImage, Luma};
@@ -13,7 +13,7 @@ pub struct Blob {
     pub area: u32,
 }
 
-/// One row of output for Open Ephys. Layout matches the old Bonsai/OSC message.
+/// One row of output for Open Ephys. Layout matches the original plugin's channels.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct TrackerSample {

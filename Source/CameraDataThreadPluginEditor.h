@@ -27,9 +27,9 @@
 #include <EditorHeaders.h>
 #include <ProcessorHeaders.h>
 #include "QualityInfo.h"
-#include "BonsaiDataThreadPlugin.h"
+#include "CameraDataThreadPlugin.h"
 
-namespace Bonsai {
+namespace CameraTracker {
 
 
     class SampleQualityComponent : public Component, Timer {

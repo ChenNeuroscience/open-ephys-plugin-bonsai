@@ -317,6 +317,51 @@ mod tests {
         window_snapshot("tracker_window_crop_hidden", |s| s.crop_overlay.visible = false);
     }
 
+    /// Regenerates docs/screenshot.png from a live frame of tools/fake_camera.py (needs python3):
+    ///     cargo test --release readme_screenshot -- --ignored
+    #[test]
+    #[ignore]
+    fn readme_screenshot() {
+        let port = 27398;
+        let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../tools/fake_camera.py");
+        let mut child = std::process::Command::new("python3")
+            .args([script, "--port", &port.to_string()])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .expect("run python3");
+        let mut camera = (0..50)
+            .find_map(|_| {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                crate::camera::FakeCamera::connect(&format!("127.0.0.1:{port}")).ok()
+            })
+            .expect("connect to fake camera");
+        let mut frames = std::iter::from_fn(|| camera.next_frame().unwrap()).take(40);
+        let frame = frames.by_ref().last().unwrap(); // let the mouse wander a little first
+        child.kill().ok();
+
+        // The arena floor edges are 1 m long, at ~363 px/m with the fake camera's geometry.
+        let (lo, hi) = (320.0 - 181.6, 320.0 + 181.6);
+        let mut state = TrackerState::default();
+        state.pipeline.crop = Crop::Square { center: [320.0, 240.0], size: 452.0, angle: 0.0 };
+        state.calibration.rulers = vec![
+            Ruler { a: [lo, 240.0 + 181.6], b: [hi, 240.0 + 181.6], length_cm: 100.0 },
+            Ruler { a: [320.0 - 181.6, 240.0 - 181.6], b: [320.0 - 181.6, 240.0 + 181.6], length_cm: 100.0 },
+        ];
+        let blobs = crate::pipeline::Pipeline::default().process(&frame.image, &state.pipeline);
+        let shared = Arc::new(Shared { state: state.into(), ..Default::default() });
+        *shared.status.lock().unwrap() = "running".into();
+        *shared.stats.lock().unwrap() = crate::tracker::Stats { frames: 2961, fps: 50.0, process_ms: 1.6, ..Default::default() };
+        shared.state.lock().unwrap().crop_overlay.locked = true;
+        *shared.latest.lock().unwrap() = Some(Arc::new(View { frame, blobs }));
+
+        let mut app = TrackerApp::new(shared);
+        let mut harness = egui_kittest::Harness::builder().with_size([1050.0, 600.0]).wgpu().build_ui(|ui| app.show(ui));
+        harness.run();
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/screenshot.png");
+        std::fs::create_dir_all(std::path::Path::new(path).parent().unwrap()).unwrap();
+        harness.render().unwrap().save(path).unwrap();
+    }
+
     #[test]
     fn icons_snapshot() {
         let mut values = [true, false, true, false];

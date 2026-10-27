@@ -2,7 +2,7 @@
 name = "tracker"
 version = "0.1.0"
 edition = "2021"
-description = "Camera capture, LED tracking and live view for the Open Ephys bonsai plugin"
+description = "Camera capture, LED tracking and live view for the Open Ephys camera plugin"
 publish = false
 
 [lib]

@@ -1,68 +1,112 @@
-# Open Ephys (v1) Plugin - Bonsai
+# Open Ephys (v1) Plugin - Camera
 
-> **`rust-tracker` branch:** the OSC/Bonsai input is replaced by an in-process Rust camera tracker
-> (`tracker/`), which captures frames, finds the two LEDs and opens its own live-view window during
-> acquisition (Windows; on macOS it runs headless, so use `tracker-dev`). See [PLAN.md](PLAN.md). Quick start:
->
-> ```bash
-> python3 tools/fake_camera.py                       # fake camera on 127.0.0.1:27030 (stdlib only)
-> cd tracker && cargo run --release --bin tracker-dev  # standalone window + sample printout
-> cargo test --release -- --include-ignored            # unit tests + end-to-end test vs fake_camera.py
-> ```
->
-> Building the plugin now also needs a Rust toolchain (https://rustup.rs); CMake fetches
-> [Corrosion](https://github.com/corrosion-rs/corrosion) to drive cargo. The channel layout is unchanged.
+An Open Ephys source plugin that tracks an animal's head LEDs from an overhead camera and records their
+positions as continuous channels alongside your ephys data. It's inspired by the kind of pipeline you'd
+build in [Bonsai](https://bonsai-rx.org/), but it's a small, opinionated tracker written in Rust and runs
+inside Open Ephys, with its own live-view window.
 
+![The tracker window: arena with a square crop, two calibration rulers and the mouse's LEDs circled](docs/screenshot.png)
 
-<img width="291" height="157" alt="Screenshot 2025-07-11 at 00 42 37" src="https://github.com/user-attachments/assets/2f920dce-3caf-465e-9eb0-74358f9c16b2" />
+## What it does
 
+Each camera frame goes through: **crop → threshold → connected regions → two largest regions**. The
+centroids and areas of those two regions (normally the big and small headstage LEDs) become one sample.
 
-This runs an OSC UDP Server (using an open ephys DataThread plugin). The Server expects messages that optionally start with a timestamp value, and then contain 1-8 float values
-(you must specify the exact number of values in the interface and specify if there is a timetamp first or not). Each of the float values is given its own continuous channel.
-You can view the raw values in openephys using the LFP viewer, though it's not going to be that interesting in that form. The timestamp is not plugged into the proper timestamp
-machinery of openephys because that doesn't actually seem to be visible to the record engine downstream. Instead we put the timestamp into its own channel (the first channel,
-before the other channels).
+| Channel | Contents |
+|---|---|
+| `BONS1` | camera timestamp, seconds since the first frame |
+| `BONS2`, `BONS3` | x, y of the largest region (pixels) |
+| `BONS4`, `BONS5` | x, y of the second largest region |
+| `BONS6`, `BONS7` | areas of the two regions (pixels) |
 
-There is a slight problem with having a 32bit timestamp though:  32 bit floats can only just about represent 3 decimal places above 20,000 (5hs in seconds); at that point there are
-about 5 representable values in the third decimal place for each value in the second decimal place. But hopefully that's enough here. The timestamp provided by Bonsai should be
-a 64 bit double, but it will then be converted to a single (32bit) float here, with the first received timestamp treated as the zero point (which ensures that the number are small
-so long as acquisition is restarted at least every 4hrs or so).
+A missing region gives NaN coordinates and zero area. The channel names are kept from earlier versions of this
+plugin so existing analysis code keeps working.
 
-If you do provide a timestamp, the plugin is then able to "smooth" the samples to match the exact sample rate you stated. This means that if a given sample's timestamp is too early
-it may get dropped entirely, and if it's very late NaNs will be used to fill the gap. The widget has a way of visualising this: dropped samples are shown in red; gaps filled are
-shown in white; green is good samples, specifically a full green bar is a timestamp that is accurate with partial green bars indicating a slightly early or late sample.  To be clear
-this is not referencing when the data was recieved, it's just looking at the value of the timestamps that were recieved relative to the first such timestamp and the stated sample rate.
+While acquisition runs, a tracker window shows the live video with:
 
-The intention is that the data is coming from a camera via Bonsai, with the float values corresponding to some kind of x and y values - indeed we provide a python script here,
-`dummy-bonsai.py` which can be used to simmulate an animal running around indefinitely with two leds on its head.
+- **Detection**: brightness threshold (pixels above it can be highlighted), min/max region area.
+- **Crop**: none, circle, square or rectangle. Drag to move, use the handles to resize, and use the stalk to
+  rotate (shift snaps to 15°). The eye shows the whole frame with the crop outline, or hides it and masks
+  out everything outside the crop. The padlock stops it being dragged.
+- **Calibration**: rulers you drag onto things of known size and give a length in cm. The mean pixels per
+  metre is shown in the panel and over the video, even while the rulers are hidden (eye) or locked
+  (padlock).
+- Stats: frame rate, processing time, dropped frames.
 
-WARNING: this is not yet going to allow for any kind of precision in terms of timing latency relative to other data sources, it only provides internal consistency.
+These settings are saved with the Open Ephys signal chain.
+
+> **macOS:** the tracker window can't open inside Open Ephys on macOS (only the main thread can create
+> windows there, and Open Ephys owns it), so the plugin runs without one. Use `tracker-dev` (below) to
+> see the window. Windows and Linux are fine.
+
+### Cameras
+
+For now there's a fake camera (`tools/fake_camera.py`, streaming over TCP) and a built-in synthetic one.
+Support for real cameras is next; see [PLAN.md](PLAN.md).
+
+### Timestamps and sample quality
+
+The plugin "smooths" samples onto the sample rate set in the editor, using the camera's timestamps
+relative to the first frame. A sample more than half a period early is dropped; if a sample is more than
+half a period late, the gap is filled with NaN samples. The editor's quality widget shows the last 10
+seconds: green for samples used (a full bar means on time, shorter bars mean slightly early or late),
+white for gap-filled samples, and red for dropped ones. This reflects the camera's timestamps, not
+arrival times, so it gives internal consistency rather than precise alignment with other data sources.
+
+The timestamp channel is a 32-bit float, which holds about three decimal places up to ~5 hours. Restart
+acquisition at least that often.
 
 ## Installing
 
-This plugin is not part of the offical set of Open Ephys plugins, but you can easily install it yourself by downloading the `.dll` file from the [latest release](https://github.com/d1manson/open-ephys-plugin-bonsai/releases)
-and then moving it into your `C:\Program Files\Open Ephys\plugins` folder (Mac/Linux binaries not provided here currently).
+The plugin isn't part of the official Open Ephys set. Windows builds come from GitHub Actions:
+
+- **Branches / pull requests:** open the workflow run and download the `open-ephys-plugin-camera` artifact.
+- **master:** each push also creates a [release](https://github.com/d1manson/open-ephys-plugin-bonsai/releases).
+
+Copy `open-ephys-plugin-camera.dll` into `C:\Program Files\Open Ephys\plugins` and add the **Camera**
+source to your signal chain.
 
 ## Development
 
-See the [Open Ephys Plugin API docs](https://open-ephys.github.io/gui-docs/Developer-Guide/Open-Ephys-Plugin-API/index.html) for info on how to develop a plugin
-including links to the template repos. It's also worth looking at the source code for other plugins and the plugin-gui repo itself. A lot of what's been done here was
-inspired by existing code.
+You need CMake, a C++ toolchain, the [Open Ephys GUI source](https://github.com/open-ephys/plugin-GUI)
+(built first), and Rust via [rustup](https://rustup.rs). CMake fetches
+[Corrosion](https://github.com/corrosion-rs/corrosion) to build the Rust library.
 
-As shown in `Source/OpenEphysLib` this is a data thread plugin, but it's worth reading the docs more widely to get better context.
+```
+Source/          C++ plugin: DataThread, editor, sample smoothing (SampleWriter)
+tracker/         Rust library: cameras, pipeline, window (egui), C API (include/tracker.h)
+tools/           fake_camera.py: a fake overhead camera over a 1x1 m arena with a mouse
+PLAN.md          architecture and roadmap
+```
 
-I found on Mac that you can build using this:
+### Without Open Ephys
 
 ```bash
-brew install cmake
-
-# run this is the main GUI's Build dir (need to do this first)
-CMAKE_C_COMPILER=clang CMAKE_CXX_COMPILER=clang cmake -G "Xcode" ..
-
-# run this in the root of this plugin (set the GUI_BASE_DIR appropriately)
-GUI_BASE_DIR=../main-gui CMAKE_C_COMPILER=clang CMAKE_CXX_COMPILER=clang cmake -G "Xcode" .
-
-# and then to actually build
-cmake --build . --config Release -- -arch x86_64 &&
-cp -R Release/open-ephys-plugin-bonsai.bundle /Users/<YOUR_MAC_USER_NAME_HERE>/Library/Application\ Support/open-ephys/plugins-api8/ 
+python3 tools/fake_camera.py                      # fake camera on 127.0.0.1:27030 (standard library only)
+cd tracker
+cargo run --release --bin tracker-dev             # the tracker window, printing samples to stdout
+cargo run --release --bin tracker-dev -- synthetic   # or without the fake camera
+cargo test --release -- --include-ignored         # tests, incl. end-to-end against fake_camera.py
 ```
+
+The window tests compare against images in `tracker/tests/snapshots/`. Run with `UPDATE_SNAPSHOTS=1` to
+accept intended changes. `cargo test --release readme_screenshot -- --ignored` regenerates
+`docs/screenshot.png`.
+
+### Building the plugin on macOS
+
+```bash
+# in the Open Ephys GUI's Build dir, first
+cmake -G Xcode ..
+
+# then in this repo's Build dir (set GUI_BASE_DIR to your GUI checkout)
+GUI_BASE_DIR=../../plugin-GUI cmake -G Xcode ..
+cmake --build . --config Release
+cp -R Release/open-ephys-plugin-camera.bundle ~/Library/Application\ Support/open-ephys/plugins-api10/
+```
+
+macOS builds are for the host architecture only (Corrosion can't build universal binaries).
+
+### Building on Windows
+
+See [.github/workflows/windows.yml](.github/workflows/windows.yml) for the exact steps CI uses.
