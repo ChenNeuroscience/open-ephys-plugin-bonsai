@@ -310,7 +310,7 @@ fn union(parent: &mut [u32], a: usize, b: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::EdgeGain;
+    use crate::config::EdgeThreshold;
     use imageproc::drawing::draw_filled_rect_mut;
     use imageproc::rect::Rect;
 
@@ -405,9 +405,9 @@ mod tests {
                     angle: rand(628) as f32 / 100.0,
                 },
             };
-            // Half the cases dim an edge band; at 3 dB the band threshold is 141, so values of 120 and 200
-            // land on different sides of it.
-            let edge = EdgeGain { width: if case % 8 < 4 { 0.0 } else { rand(15) as f32 }, reduction_db: 3.0 };
+            // Half the cases have an edge band with threshold 150, so values of 120 and 200 land on different
+            // sides of it (and both above the main threshold of 100).
+            let edge = EdgeThreshold { width: if case % 8 < 4 { 0.0 } else { rand(15) as f32 }, threshold: 150 };
             let config = PipelineConfig { threshold: 100, min_area: rand(3), max_area: None, crop, edge };
             let ours = sorted(Pipeline::default().process(&img, &config));
             let reference = sorted(reference_process(&img, &config));
@@ -424,10 +424,8 @@ mod tests {
         let mut config = PipelineConfig { crop, ..Default::default() };
         assert_eq!(Pipeline::default().process(&img, &config).len(), 2);
 
-        // Within 30 px of the boundary at -6 dB, 220 becomes 110, below the threshold of 200. (The band's
-        // threshold would be 200 / 0.5 = 399, so nothing there can count.)
-        config.edge = EdgeGain { width: 30.0, reduction_db: 6.0 };
-        assert_eq!(config.edge_threshold(), 255);
+        // Within 30 px of the boundary the threshold is 230, so the 220 LED there doesn't count.
+        config.edge = EdgeThreshold { width: 30.0, threshold: 230 };
         assert_eq!(Pipeline::default().process(&img, &config), vec![Blob { x: 99.5, y: 99.5, area: 16 }]);
     }
 

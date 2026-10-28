@@ -115,40 +115,39 @@ pub struct PipelineConfig {
     pub max_area: Option<u32>,
     /// Only pixels inside this region are considered.
     pub crop: Crop,
-    /// Reduced gain near the crop boundary, to suppress LED reflections off the walls.
-    pub edge: EdgeGain,
+    /// A higher threshold near the crop boundary, to ignore LED reflections off the walls.
+    pub edge: EdgeThreshold,
 }
 
 impl Default for PipelineConfig {
     fn default() -> Self {
-        PipelineConfig { threshold: 200, min_area: 5, max_area: None, crop: Crop::None, edge: EdgeGain::default() }
+        PipelineConfig { threshold: 200, min_area: 5, max_area: None, crop: Crop::None, edge: EdgeThreshold::default() }
     }
 }
 
 impl PipelineConfig {
-    /// The threshold for pixels within the edge band: a pixel counts if its value, scaled down by the edge
-    /// gain, is still above `threshold`. 255 means nothing there can count.
+    /// The threshold for pixels within the edge band; never below `threshold` (the pipeline's quick
+    /// rejection of empty rows relies on that). 255 means nothing there can count.
     pub fn edge_threshold(&self) -> u8 {
         if self.edge.width <= 0.0 || self.crop == Crop::None {
             return self.threshold;
         }
-        let gain = 10f32.powf(-self.edge.reduction_db.max(0.0) / 20.0);
-        (self.threshold as f32 / gain).floor().min(255.0) as u8
+        self.edge.threshold.max(self.threshold)
     }
 }
 
-/// Pixels within `width` of the crop boundary have their gain reduced by `reduction_db`.
+/// Pixels within `width` of the crop boundary use `threshold` instead of the main threshold.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
-pub struct EdgeGain {
+pub struct EdgeThreshold {
     /// Pixels; 0 turns it off.
     pub width: f32,
-    pub reduction_db: f32,
+    pub threshold: u8,
 }
 
-impl Default for EdgeGain {
+impl Default for EdgeThreshold {
     fn default() -> Self {
-        EdgeGain { width: 0.0, reduction_db: 6.0 }
+        EdgeThreshold { width: 0.0, threshold: 250 }
     }
 }
 

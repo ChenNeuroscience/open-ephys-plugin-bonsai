@@ -136,16 +136,6 @@ impl TrackerApp {
         section(ui, "Camera", recording, None, (&mut locked, "Lock the camera settings"), |ui| self.camera(ui));
         self.state.camera_locked = locked;
 
-        let mut overlay = self.state.detection_overlay;
-        section(
-            ui,
-            "Detection", recording,
-            Some((&mut overlay.visible, "Highlight pixels above the threshold and circle the detected regions")),
-            (&mut overlay.locked, "Lock the detection settings"),
-            |ui| self.detection(ui),
-        );
-        self.state.detection_overlay = overlay;
-
         let mut overlay = self.state.crop_overlay;
         section(
             ui,
@@ -156,6 +146,16 @@ impl TrackerApp {
             |ui| self.crop(ui),
         );
         self.state.crop_overlay = overlay;
+
+        let mut overlay = self.state.detection_overlay;
+        section(
+            ui,
+            "Detection", recording,
+            Some((&mut overlay.visible, "Highlight pixels above the threshold and circle the detected regions")),
+            (&mut overlay.locked, "Lock the detection settings"),
+            |ui| self.detection(ui),
+        );
+        self.state.detection_overlay = overlay;
 
         let mut overlay = self.state.calibration.overlay;
         section(
@@ -294,11 +294,23 @@ impl TrackerApp {
                 v
             });
         });
+        if p.crop != Crop::None {
+            ui.horizontal(|ui| {
+                let label = ui.label("Near edge").on_hover_text(
+                    "A higher threshold for pixels this close to the crop boundary, so LED reflections off the \
+                     walls don't count. The dashed line shows where it stops. 0 px turns it off.",
+                );
+                p.edge.threshold = p.edge.threshold.max(p.threshold);
+                ui.add(egui::DragValue::new(&mut p.edge.threshold).range(p.threshold..=255)).labelled_by(label.id);
+                ui.label("within");
+                ui.add(egui::DragValue::new(&mut p.edge.width).range(0.0..=1000.0).speed(0.5).suffix(" px"));
+            });
+        }
     }
 
     fn crop(&mut self, ui: &mut egui::Ui) {
         let image = self.image_size();
-        let TrackerState { pipeline: PipelineConfig { crop, edge, .. }, crop_overlay: overlay, .. } = &mut self.state;
+        let TrackerState { pipeline: PipelineConfig { crop, .. }, crop_overlay: overlay, .. } = &mut self.state;
         if overlay.locked {
             ui.disable();
         }
@@ -339,16 +351,6 @@ impl TrackerApp {
                     angle_row(ui, angle);
                 }
             }
-            ui.label("Near edge").on_hover_text(
-                "Reduce the gain of pixels this close to the crop boundary, so LED reflections off the walls \
-                 don't count. The dashed line shows where the reduction stops.",
-            );
-            ui.horizontal(|ui| {
-                ui.add(egui::DragValue::new(&mut edge.reduction_db).range(0.0..=40.0).speed(0.1).prefix("−").suffix(" dB"));
-                ui.label("within");
-                ui.add(egui::DragValue::new(&mut edge.width).range(0.0..=1000.0).speed(0.5).suffix(" px"));
-            });
-            ui.end_row();
         });
     }
 
@@ -546,7 +548,7 @@ mod tests {
         let frame = camera.next_frame().unwrap().unwrap();
         let mut state = TrackerState::default();
         state.pipeline.crop = Crop::Rectangle { center: [330.0, 250.0], width: 420.0, height: 300.0, angle: 0.3 };
-        state.pipeline.edge = crate::config::EdgeGain { width: 25.0, reduction_db: 6.0 };
+        state.pipeline.edge = crate::config::EdgeThreshold { width: 25.0, threshold: 250 };
         state.calibration.rulers = vec![
             Ruler { a: [120.0, 420.0], b: [480.0, 420.0], length_cm: 100.0 },
             Ruler { a: [560.0, 80.0], b: [560.0, 260.0], length_cm: 0.0 },
