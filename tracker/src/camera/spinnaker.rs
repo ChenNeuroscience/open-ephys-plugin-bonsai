@@ -3,8 +3,8 @@
 //! machines without the SDK just get an error when this camera is selected.
 //!
 //! Function signatures follow the SDK's `SpinnakerC.h` (cross-checked against the generated bindings in
-//! Spinnaker.jl). Camera settings not touched here (exposure, gain, trigger mode...) are left as configured,
-//! e.g. in SpinView.
+//! Spinnaker.jl). Exposure and gain are only changed when the tracker window asks; other settings (trigger
+//! mode, region of interest...) are left as configured, e.g. in SpinView.
 
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::io;
@@ -13,7 +13,8 @@ use std::sync::OnceLock;
 use image::GrayImage;
 use libloading::Library;
 
-use super::{Camera, Frame};
+use super::{Camera, CameraControls, Frame, Range};
+use crate::config::{CameraSettings, Control};
 
 type Handle = *mut c_void;
 type SpinError = i32;
@@ -107,6 +108,9 @@ spinnaker_api! {
     spinEnumerationSetIntValue(Handle, i64);
     spinBooleanSetValue(Handle, Bool8);
     spinFloatSetValue(Handle, f64);
+    spinFloatGetValue(Handle, *mut f64);
+    spinFloatGetMin(Handle, *mut f64);
+    spinFloatGetMax(Handle, *mut f64);
     spinStringGetValue(Handle, *mut c_char, *mut usize);
 }
 
@@ -194,6 +198,31 @@ impl Api {
         unsafe { self.check((self.spinFloatSetValue)(node, value), name) }
     }
 
+    fn get_float(&self, map: Handle, name: &str) -> Option<Range> {
+        let node = self.node(map, name).filter(|&n| self.flag(self.spinNodeIsReadable, n))?;
+        let (mut min, mut max, mut current) = (0.0, 0.0, 0.0);
+        unsafe {
+            ((self.spinFloatGetMin)(node, &mut min) == SUCCESS
+                && (self.spinFloatGetMax)(node, &mut max) == SUCCESS
+                && (self.spinFloatGetValue)(node, &mut current) == SUCCESS)
+                .then_some(Range { min, max, current })
+        }
+    }
+
+    /// Sets e.g. ExposureAuto/ExposureTime from a [`Control`].
+    fn set_control(&self, map: Handle, auto_name: &str, value_name: &str, control: Control) -> io::Result<()> {
+        match control {
+            Control::Unchanged => Ok(()),
+            Control::Auto => self.set_enum(map, auto_name, "Continuous"),
+            Control::Manual(v) => {
+                // Not every camera has the auto node; that's fine if the value itself is writable.
+                let _ = self.set_enum(map, auto_name, "Off");
+                let range = self.get_float(map, value_name);
+                self.set_float(map, value_name, range.map_or(v, |r| v.clamp(r.min, r.max)))
+            }
+        }
+    }
+
     fn get_string(&self, map: Handle, name: &str) -> Option<String> {
         let node = self.node(map, name).filter(|&n| self.flag(self.spinNodeIsReadable, n))?;
         let mut buf = [0 as c_char; 256];
@@ -222,6 +251,8 @@ pub struct SpinnakerCamera {
     api: &'static Api,
     system: Handle,
     camera: Handle,
+    /// The camera's settings (GenICam node map); valid once initialised.
+    map: Handle,
     /// Camera clock timestamps from chunk data (as Bonsai used), rather than the transport layer's.
     chunk_timestamps: bool,
     description: String,
@@ -233,7 +264,7 @@ unsafe impl Send for SpinnakerCamera {}
 impl SpinnakerCamera {
     /// Opens the camera with the given serial number, or the first one found. `fps` sets the camera's frame
     /// rate where it allows that; `library` overrides where the SDK is loaded from.
-    pub fn open(serial: Option<&str>, fps: Option<f64>, library: Option<&str>) -> io::Result<Self> {
+    pub fn open(serial: Option<&str>, fps: f64, library: Option<&str>) -> io::Result<Self> {
         let api = Api::get(library)?;
         let mut system: Handle = std::ptr::null_mut();
         unsafe { api.check((api.spinSystemGetInstance)(&mut system), "getting the system")? };
@@ -242,6 +273,7 @@ impl SpinnakerCamera {
             api,
             system,
             camera: std::ptr::null_mut(),
+            map: std::ptr::null_mut(),
             chunk_timestamps: false,
             description: String::new(),
         };
@@ -300,13 +332,14 @@ impl SpinnakerCamera {
         Ok(found)
     }
 
-    fn configure(&mut self, fps: Option<f64>) -> io::Result<()> {
+    fn configure(&mut self, fps: f64) -> io::Result<()> {
         let api = self.api;
         let mut map: Handle = std::ptr::null_mut();
         unsafe {
             api.check((api.spinCameraInit)(self.camera), "initialising the camera")?;
             api.check((api.spinCameraGetNodeMap)(self.camera, &mut map), "getting camera settings")?;
         }
+        self.map = map;
         api.set_enum(map, "PixelFormat", "Mono8")
             .map_err(|e| io::Error::other(format!("camera must support 8-bit mono output: {e}")))?;
         let _ = api.set_enum(map, "AcquisitionMode", "Continuous");
@@ -318,14 +351,12 @@ impl SpinnakerCamera {
         if !self.chunk_timestamps {
             notes.push("no chunk timestamps, using transport timestamps".to_string());
         }
-        if let Some(fps) = fps {
-            // Blackfly S calls it ...Enable, older models ...Enabled.
-            let _ = api
-                .set_bool(map, "AcquisitionFrameRateEnable", true)
-                .or_else(|_| api.set_bool(map, "AcquisitionFrameRateEnabled", true));
-            if let Err(e) = api.set_float(map, "AcquisitionFrameRate", fps) {
-                notes.push(format!("couldn't set frame rate: {e}"));
-            }
+        // Blackfly S calls it ...Enable, older models ...Enabled.
+        let _ = api
+            .set_bool(map, "AcquisitionFrameRateEnable", true)
+            .or_else(|_| api.set_bool(map, "AcquisitionFrameRateEnabled", true));
+        if let Err(e) = api.set_float(map, "AcquisitionFrameRate", fps) {
+            notes.push(format!("couldn't set frame rate: {e}"));
         }
         if !notes.is_empty() {
             self.description += &format!(" [{}]", notes.join("; "));
@@ -393,6 +424,22 @@ impl Camera for SpinnakerCamera {
 
     fn description(&self) -> String {
         format!("Spinnaker: {}", self.description)
+    }
+
+    fn apply(&mut self, settings: &CameraSettings) -> io::Result<()> {
+        let api = self.api;
+        let exposure = api.set_control(self.map, "ExposureAuto", "ExposureTime", settings.exposure);
+        let gain = api.set_control(self.map, "GainAuto", "Gain", settings.gain);
+        exposure.and(gain)
+    }
+
+    fn controls(&self) -> CameraControls {
+        let api = self.api;
+        CameraControls {
+            frame_rate: api.get_float(self.map, "AcquisitionFrameRate"),
+            exposure: api.get_float(self.map, "ExposureTime"),
+            gain: api.get_float(self.map, "Gain"),
+        }
     }
 }
 

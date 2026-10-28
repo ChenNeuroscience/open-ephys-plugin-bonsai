@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TrySendError};
 
-use crate::camera::{self, Frame};
+use crate::camera::{self, CameraControls, Frame};
 use crate::config::{CameraConfig, Config, TrackerState};
 use crate::pipeline::{Blob, Pipeline, TrackerSample};
 
@@ -39,6 +39,11 @@ pub struct Shared {
     pub status: Mutex<String>,
     pub stats: Mutex<Stats>,
     pub stop: AtomicBool,
+    /// The frame rate this acquisition runs at (the stream's declared sample rate). Changing the frame rate
+    /// in the state takes effect from the next acquisition.
+    pub active_frame_rate: f64,
+    /// What the open camera supports, refreshed after settings are applied.
+    pub controls: Mutex<CameraControls>,
     /// Set by the GUI so the capture thread can wake it when a new frame arrives.
     pub repaint: Mutex<Option<eframe::egui::Context>>,
 }
@@ -63,7 +68,11 @@ pub struct Tracker {
 
 impl Tracker {
     pub fn start(config: Config) -> Tracker {
-        let shared = Arc::new(Shared { state: Mutex::new(config.state), ..Default::default() });
+        let shared = Arc::new(Shared {
+            active_frame_rate: config.state.camera.frame_rate,
+            state: Mutex::new(config.state),
+            ..Default::default()
+        });
         let (tx, rx) = crossbeam_channel::bounded(SAMPLE_QUEUE_LEN);
         let thread_shared = shared.clone();
         let camera_config = config.camera;
@@ -124,7 +133,7 @@ fn capture_loop(shared: &Shared, camera_config: &CameraConfig, tx: &Sender<Track
     let mut pipeline = Pipeline::default();
 
     while !stopping() {
-        let mut camera = match camera::open(camera_config) {
+        let mut camera = match camera::open(camera_config, shared.active_frame_rate) {
             Ok(c) => c,
             Err(e) => {
                 shared.set_status(format!("waiting for camera: {e}"));
@@ -137,9 +146,20 @@ fn capture_loop(shared: &Shared, camera_config: &CameraConfig, tx: &Sender<Track
         };
         let description = camera.description();
         shared.set_status(if description.is_empty() { "running".to_string() } else { format!("running: {description}") });
+        *shared.controls.lock().unwrap() = camera.controls();
         let mut last: Option<(u64, f64)> = None;
+        let mut applied = None;
 
         while !stopping() {
+            let settings = shared.state.lock().unwrap().camera;
+            if applied != Some(settings) {
+                if let Err(e) = camera.apply(&settings) {
+                    shared.set_status(format!("running: {description} [couldn't apply camera settings: {e}]"));
+                }
+                *shared.controls.lock().unwrap() = camera.controls();
+                applied = Some(settings);
+            }
+
             let frame = match camera.next_frame() {
                 Ok(Some(f)) => f,
                 Ok(None) => continue,

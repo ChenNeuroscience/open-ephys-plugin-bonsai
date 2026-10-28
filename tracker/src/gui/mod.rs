@@ -9,7 +9,8 @@ use std::sync::Arc;
 
 use eframe::egui::{self, RichText};
 
-use crate::config::{Crop, Overlay, PipelineConfig, Ruler, TrackerState};
+use crate::camera::Range;
+use crate::config::{Control, Crop, Overlay, PipelineConfig, Ruler, TrackerState};
 use crate::tracker::Shared;
 
 /// Used for sizing new shapes before the first frame has arrived.
@@ -94,13 +95,16 @@ impl TrackerApp {
 
         egui::CollapsingHeader::new(RichText::new("Stats").strong()).default_open(true).show(ui, |ui| self.stats(ui));
 
+        let mut locked = self.state.camera_locked;
+        section(ui, "Camera", None, (&mut locked, "Lock the camera settings"), |ui| self.camera(ui));
+        self.state.camera_locked = locked;
+
         let mut overlay = self.state.detection_overlay;
         section(
             ui,
             "Detection",
-            &mut overlay,
-            "Highlight pixels above the threshold and circle the detected regions",
-            "Lock the detection settings",
+            Some((&mut overlay.visible, "Highlight pixels above the threshold and circle the detected regions")),
+            (&mut overlay.locked, "Lock the detection settings"),
             |ui| self.detection(ui),
         );
         self.state.detection_overlay = overlay;
@@ -109,10 +113,9 @@ impl TrackerApp {
         section(
             ui,
             "Crop",
-            &mut overlay,
-            "Show the whole frame with the crop outline, or hide it and mask out everything outside the crop",
-            "Lock the crop. Unlocked: drag inside to move, drag the square handles to resize, and the round \
-             handle on the stalk to rotate (hold shift to snap to 15°)",
+            Some((&mut overlay.visible, "Show the whole frame with the crop outline, or hide it and mask out everything outside the crop")),
+            (&mut overlay.locked, "Lock the crop. Unlocked: drag inside to move, drag the square handles to resize, and the round \
+             handle on the stalk to rotate (hold shift to snap to 15°)"),
             |ui| self.crop(ui),
         );
         self.state.crop_overlay = overlay;
@@ -121,9 +124,8 @@ impl TrackerApp {
         section(
             ui,
             "Calibration",
-            &mut overlay,
-            "Show or hide the rulers (they still count towards px/m)",
-            "Lock the rulers so they can't be dragged or edited",
+            Some((&mut overlay.visible, "Show or hide the rulers (they still count towards px/m)")),
+            (&mut overlay.locked, "Lock the rulers so they can't be dragged or edited"),
             |ui| self.calibration(ui),
         );
         self.state.calibration.overlay = overlay;
@@ -144,6 +146,27 @@ impl TrackerApp {
                 ui.end_row();
             }
         });
+    }
+
+    fn camera(&mut self, ui: &mut egui::Ui) {
+        if self.state.camera_locked {
+            ui.disable();
+        }
+        let controls = *self.shared.controls.lock().unwrap();
+        let settings = &mut self.state.camera;
+        egui::Grid::new("camera").num_columns(2).show(ui, |ui| {
+            ui.label("Frame rate");
+            let range = controls.frame_rate.map_or(1.0..=1000.0, |r| r.min..=r.max);
+            ui.add(egui::DragValue::new(&mut settings.frame_rate).range(range).speed(0.1).max_decimals(2).suffix(" fps"))
+                .on_hover_text("Also the sample rate of the Open Ephys data stream");
+            ui.end_row();
+            control_row(ui, "Exposure", &mut settings.exposure, controls.exposure, " µs", true);
+            control_row(ui, "Gain", &mut settings.gain, controls.gain, " dB", false);
+        });
+        let active = self.shared.active_frame_rate;
+        if settings.frame_rate != active {
+            ui.weak(format!("Running at {active} fps; the new frame rate applies from the next acquisition."));
+        }
     }
 
     fn detection(&mut self, ui: &mut egui::Ui) {
@@ -259,9 +282,8 @@ impl TrackerApp {
 fn section(
     ui: &mut egui::Ui,
     title: &str,
-    overlay: &mut Overlay,
-    eye_tip: &str,
-    lock_tip: &str,
+    visible: Option<(&mut bool, &str)>,
+    (locked, lock_tip): (&mut bool, &str),
     body: impl FnOnce(&mut egui::Ui),
 ) {
     let id = ui.make_persistent_id(title);
@@ -269,11 +291,44 @@ fn section(
         .show_header(ui, |ui| {
             ui.label(RichText::new(title).strong());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                icons::toggle(ui, &mut overlay.locked, icons::padlock, lock_tip);
-                icons::toggle(ui, &mut overlay.visible, icons::eye, eye_tip);
+                icons::toggle(ui, locked, icons::padlock, lock_tip);
+                if let Some((visible, eye_tip)) = visible {
+                    icons::toggle(ui, visible, icons::eye, eye_tip);
+                }
             });
         })
         .body(body);
+}
+
+/// A camera setting that may be left as the camera has it, automatic, or set manually.
+fn control_row(ui: &mut egui::Ui, name: &str, control: &mut Control, range: Option<Range>, unit: &str, log: bool) {
+    ui.label(name);
+    ui.vertical(|ui| {
+        let Some(range) = range else {
+            ui.weak("not supported by this camera");
+            return;
+        };
+        ui.horizontal(|ui| {
+            let manual = Control::Manual(range.current.clamp(range.min, range.max));
+            for (option, label) in [(Control::Unchanged, "Camera"), (Control::Auto, "Auto"), (manual, "Manual")] {
+                let selected = std::mem::discriminant(control) == std::mem::discriminant(&option);
+                if ui.selectable_label(selected, label).clicked() && !selected {
+                    *control = option;
+                }
+            }
+        })
+        .response
+        .on_hover_text("Camera: leave it as the camera is configured (e.g. in SpinView)");
+        match control {
+            Control::Manual(v) => {
+                ui.add(egui::Slider::new(v, range.min..=range.max).logarithmic(log).suffix(unit));
+            }
+            _ => {
+                ui.weak(format!("now {:.1}{unit}", range.current));
+            }
+        }
+    });
+    ui.end_row();
 }
 
 fn center_row(ui: &mut egui::Ui, center: &mut [f32; 2]) {
@@ -341,7 +396,8 @@ mod tests {
 
     /// Renders the whole window. Run with UPDATE_SNAPSHOTS=1 to accept changes; see tests/snapshots/.
     fn window_snapshot(name: &str, configure: impl FnOnce(&mut TrackerState)) {
-        let frame = SyntheticCamera::new(640, 480, 1000.0).next_frame().unwrap().unwrap();
+        let mut camera = SyntheticCamera::new(640, 480, 50.0);
+        let frame = camera.next_frame().unwrap().unwrap();
         let mut state = TrackerState::default();
         state.pipeline.crop = Crop::Rectangle { center: [330.0, 250.0], width: 420.0, height: 300.0, angle: 0.3 };
         state.calibration.rulers = vec![
@@ -350,7 +406,12 @@ mod tests {
         ];
         configure(&mut state);
         let blobs = crate::pipeline::Pipeline::default().process(&frame.image, &state.pipeline);
-        let shared = Arc::new(Shared { state: state.into(), ..Default::default() });
+        let shared = Arc::new(Shared {
+            active_frame_rate: 50.0,
+            controls: camera.controls().into(),
+            state: state.into(),
+            ..Default::default()
+        });
         *shared.latest.lock().unwrap() = Some(Arc::new(View { frame, blobs }));
 
         let (renderer, target_format) = test_renderer();
@@ -407,7 +468,12 @@ mod tests {
             Ruler { a: [320.0 - 181.6, 240.0 - 181.6], b: [320.0 - 181.6, 240.0 + 181.6], length_cm: 100.0 },
         ];
         let blobs = crate::pipeline::Pipeline::default().process(&frame.image, &state.pipeline);
-        let shared = Arc::new(Shared { state: state.into(), ..Default::default() });
+        let shared = Arc::new(Shared {
+            active_frame_rate: 50.0,
+            controls: SyntheticCamera::new(640, 480, 50.0).controls().into(),
+            state: state.into(),
+            ..Default::default()
+        });
         *shared.status.lock().unwrap() = "running".into();
         *shared.stats.lock().unwrap() = crate::tracker::Stats { frames: 2961, fps: 50.0, process_ms: 1.6, ..Default::default() };
         shared.state.lock().unwrap().crop_overlay.locked = true;

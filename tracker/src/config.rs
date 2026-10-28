@@ -17,6 +17,8 @@ pub struct Config {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TrackerState {
+    pub camera: CameraSettings,
+    pub camera_locked: bool,
     pub pipeline: PipelineConfig,
     /// Visible: above-threshold pixels are highlighted and detected regions circled. Locked: settings can't be changed.
     pub detection_overlay: Overlay,
@@ -50,7 +52,7 @@ impl Overlay {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CameraConfig {
     /// In-process test scene with two moving LEDs.
-    Synthetic { width: u32, height: u32, fps: f64 },
+    Synthetic { width: u32, height: u32 },
     /// Raw frames streamed over TCP by `tools/fake_camera.py`.
     Fake { address: String },
     /// A Teledyne FLIR camera via the Spinnaker SDK.
@@ -58,9 +60,6 @@ pub enum CameraConfig {
         /// `None` (or blank) for the first camera found.
         #[serde(default)]
         serial: Option<String>,
-        /// Frame rate to set on the camera, where it allows that.
-        #[serde(default)]
-        fps: Option<f64>,
         /// Path to the Spinnaker C library, if it isn't found automatically.
         #[serde(default)]
         library: Option<String>,
@@ -71,6 +70,36 @@ impl Default for CameraConfig {
     fn default() -> Self {
         CameraConfig::Fake { address: "127.0.0.1:27030".into() }
     }
+}
+
+/// Camera settings adjustable from the tracker window.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CameraSettings {
+    /// Frames per second. Fixed for the length of an acquisition, because Open Ephys declares it as the
+    /// stream's sample rate before acquisition starts; set on the camera where it allows that.
+    pub frame_rate: f64,
+    /// Microseconds.
+    pub exposure: Control,
+    /// Decibels.
+    pub gain: Control,
+}
+
+impl Default for CameraSettings {
+    fn default() -> Self {
+        CameraSettings { frame_rate: 50.0, exposure: Control::Unchanged, gain: Control::Unchanged }
+    }
+}
+
+/// How to set a camera feature that can be automatic.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "mode", content = "value", rename_all = "snake_case")]
+pub enum Control {
+    /// Leave it as the camera is configured (e.g. in SpinView).
+    #[default]
+    Unchanged,
+    Auto,
+    Manual(f64),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -22,11 +22,11 @@ fn main() {
     let mut config = match std::env::args().nth(1).as_deref() {
         None => Config::default(),
         Some("synthetic") => Config {
-            camera: CameraConfig::Synthetic { width: 1024, height: 768, fps: 50.0 },
+            camera: CameraConfig::Synthetic { width: 1024, height: 768 },
             ..Default::default()
         },
         Some("spinnaker") => Config {
-            camera: CameraConfig::Spinnaker { serial: None, fps: None, library: None },
+            camera: CameraConfig::Spinnaker { serial: None, library: None },
             ..Default::default()
         },
         Some(json) => serde_json::from_str(json).expect("config JSON"),
