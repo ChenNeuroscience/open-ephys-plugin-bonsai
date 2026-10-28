@@ -12,7 +12,7 @@ use eframe::egui::{self, RichText};
 
 use crate::camera::Range;
 use crate::config::{Control, Crop, Overlay, PipelineConfig, Ruler, TrackerState};
-use crate::tracker::Shared;
+use crate::tracker::{Shared, Status};
 
 /// Used for sizing new shapes before the first frame has arrived.
 const FALLBACK_IMAGE_SIZE: [f32; 2] = [640.0, 480.0];
@@ -79,9 +79,19 @@ struct TrackerApp {
     video: view::VideoView,
     /// The frame rate warning is shown until this time (egui seconds), with the rate that triggered it.
     rate_warning: Option<(f64, f64)>,
-    /// Result of the last copy/paste of settings, shown until this time (egui seconds).
-    clipboard_note: Option<(f64, String)>,
+    clipboard_note: Option<ClipboardNote>,
 }
+
+/// Result of the last copy/paste of settings, shown until `until` (egui seconds).
+struct ClipboardNote {
+    until: f64,
+    text: String,
+    /// The settings from before a paste, to restore with Undo.
+    undo: Option<TrackerState>,
+}
+
+/// How long a paste can be undone.
+const UNDO_SECONDS: f64 = 30.0;
 
 /// The frame rate warning to show at `now`: (shown until, triggering rate), renewed whenever the measured
 /// rate (0 = not measured yet) is off by more than `RATE_TOLERANCE`, and held for `RATE_WARNING_HOLD`.
@@ -134,10 +144,22 @@ impl TrackerApp {
     }
 
     fn controls(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Tracker");
-        ui.label(self.shared.status.lock().unwrap().as_str());
         let recording = self.shared.recording.load(Ordering::Relaxed);
-        self.copy_paste(ui, recording);
+        ui.horizontal(|ui| {
+            ui.heading("Tracker");
+            // Nothing to say while running; otherwise a short note on what's happening.
+            match &*self.shared.status.lock().unwrap() {
+                Status::Running => {}
+                Status::Starting => {
+                    ui.weak("(starting)");
+                }
+                Status::Problem(problem) => {
+                    ui.label(RichText::new(format!("({problem})")).small().color(strip::AMBER));
+                }
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| self.settings_menu(ui, recording));
+        });
+        self.clipboard_note(ui, recording);
         if recording {
             let red = egui::Color32::from_rgb(230, 70, 70);
             ui.horizontal(|ui| {
@@ -187,38 +209,54 @@ impl TrackerApp {
     }
 
     /// Copy/paste of all the window's settings as JSON, e.g. to reuse them in another saved signal chain.
-    fn copy_paste(&mut self, ui: &mut egui::Ui, recording: bool) {
+    fn settings_menu(&mut self, ui: &mut egui::Ui, recording: bool) {
         let now = ui.input(|i| i.time);
-        ui.horizontal(|ui| {
-            if ui.button("Copy settings").on_hover_text("Copy all of these settings to the clipboard").clicked() {
+        ui.menu_button("Settings", |ui| {
+            if ui.button("Copy").on_hover_text("Copy all of the tracker settings to the clipboard").clicked() {
                 ui.ctx().copy_text(crate::config::export_settings(&self.state));
-                self.clipboard_note = Some((now + 4.0, "Settings copied.".into()));
+                self.clipboard_note = Some(ClipboardNote { until: now + 4.0, text: "Settings copied.".into(), undo: None });
             }
             let paste = ui
-                .add_enabled(!recording, egui::Button::new("Paste settings"))
-                .on_hover_text("Replace all of these settings with ones copied from another setup");
+                .add_enabled(!recording, egui::Button::new("Paste"))
+                .on_hover_text("Replace all of the tracker settings with ones copied from another setup (can be undone)");
             if paste.clicked() {
                 let result = arboard::Clipboard::new()
                     .and_then(|mut c| c.get_text())
                     .map_err(|_| "Couldn't read the clipboard.".to_string())
                     .and_then(|text| crate::config::import_settings(&text));
-                let note = match result {
+                self.clipboard_note = Some(match result {
                     Ok(pasted) => {
                         // The frame size belongs to the camera, not the settings.
-                        self.state = TrackerState { frame_size: self.state.frame_size, ..pasted };
-                        "Settings pasted.".to_string()
+                        let pasted = TrackerState { frame_size: self.state.frame_size, ..pasted };
+                        let previous = std::mem::replace(&mut self.state, pasted);
+                        ClipboardNote { until: now + UNDO_SECONDS, text: "Settings pasted.".into(), undo: Some(previous) }
                     }
-                    Err(e) => e,
-                };
-                self.clipboard_note = Some((now + 6.0, note));
+                    Err(e) => ClipboardNote { until: now + 6.0, text: e, undo: None },
+                });
             }
         });
-        if let Some((until, note)) = &self.clipboard_note {
-            if now < *until {
-                ui.weak(note.as_str());
-                ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(until - now));
-            } else {
-                self.clipboard_note = None;
+    }
+
+    /// The result of the last copy/paste, briefly, with Undo after a paste.
+    fn clipboard_note(&mut self, ui: &mut egui::Ui, recording: bool) {
+        let now = ui.input(|i| i.time);
+        let Some(note) = &self.clipboard_note else { return };
+        if now >= note.until {
+            self.clipboard_note = None;
+            return;
+        }
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(note.until - now));
+        let mut undo = false;
+        ui.horizontal(|ui| {
+            ui.weak(note.text.as_str());
+            if note.undo.is_some() {
+                undo = ui.add_enabled(!recording, egui::Button::new("Undo").small()).clicked();
+            }
+        });
+        if undo {
+            if let Some(previous) = self.clipboard_note.take().and_then(|n| n.undo) {
+                self.state = previous;
+                self.clipboard_note = Some(ClipboardNote { until: now + 4.0, text: "Paste undone.".into(), undo: None });
             }
         }
     }
@@ -241,6 +279,10 @@ impl TrackerApp {
     }
 
     fn camera(&mut self, ui: &mut egui::Ui) {
+        let description = self.shared.camera_description.lock().unwrap().clone();
+        if !description.is_empty() {
+            ui.weak(description);
+        }
         if self.state.camera_locked {
             ui.disable();
         }
@@ -672,6 +714,29 @@ mod tests {
     }
 
     #[test]
+    fn paste_can_be_undone() {
+        use egui_kittest::kittest::Queryable as _;
+        let mut app = TrackerApp::new(Arc::new(Shared::default()), None);
+        let before = app.state.clone();
+        let pasted = TrackerState { pipeline: PipelineConfig { threshold: 42, ..Default::default() }, ..before.clone() };
+        // As left by a paste: the new settings applied, the old ones kept for Undo.
+        app.state = pasted;
+        app.clipboard_note = Some(ClipboardNote { until: 1000.0, text: "Settings pasted.".into(), undo: Some(before.clone()) });
+
+        let mut harness = egui_kittest::Harness::builder().with_size([400.0, 300.0]).build_ui_state(
+            |ui, app: &mut TrackerApp| {
+                egui::ScrollArea::vertical().show(ui, |ui| app.controls(ui));
+            },
+            app,
+        );
+        harness.run();
+        harness.get_by_label("Undo").click();
+        harness.run();
+        assert_eq!(harness.state().state, before);
+        assert_eq!(harness.state().clipboard_note.as_ref().unwrap().text, "Paste undone.");
+    }
+
+    #[test]
     fn detected_rates_are_tidied() {
         assert_eq!(snap_frame_rate(30.004), 30.0);
         assert_eq!(snap_frame_rate(29.9701), 29.97);
@@ -751,7 +816,8 @@ mod tests {
             state: state.into(),
             ..Default::default()
         });
-        *shared.status.lock().unwrap() = "running".into();
+        *shared.status.lock().unwrap() = Status::Running;
+        *shared.camera_description.lock().unwrap() = "Spinnaker: Chameleon3 CM3-U3-13Y3M (serial 23208503)".into();
         *shared.stats.lock().unwrap() = crate::tracker::Stats { frames: 2961, fps: 50.0, process_ms: 1.6, ..Default::default() };
         shared.state.lock().unwrap().crop_overlay.locked = true;
         *shared.latest.lock().unwrap() = Some(Arc::new(View { frame, blobs }));

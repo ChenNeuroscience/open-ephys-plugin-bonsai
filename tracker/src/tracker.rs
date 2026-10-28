@@ -19,6 +19,16 @@ pub const LED_HISTORY: f64 = 10.0;
 /// Enough for tens of seconds at typical frame rates if Open Ephys stalls.
 const SAMPLE_QUEUE_LEN: usize = 4096;
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum Status {
+    /// Opening the camera.
+    #[default]
+    Starting,
+    Running,
+    /// Something's wrong (e.g. no camera); the tracker keeps retrying where it can.
+    Problem(String),
+}
+
 /// The most recent processed frame, for display.
 pub struct View {
     pub frame: Frame,
@@ -44,7 +54,9 @@ pub struct Shared {
     /// Written by the GUI; the pipeline part is read by the capture thread every frame.
     pub state: Mutex<TrackerState>,
     pub latest: Mutex<Option<Arc<View>>>,
-    pub status: Mutex<String>,
+    pub status: Mutex<Status>,
+    /// The open camera, e.g. its model and serial number; empty if it doesn't say.
+    pub camera_description: Mutex<String>,
     pub stats: Mutex<Stats>,
     pub stop: AtomicBool,
     /// The frame rate this acquisition runs at (the stream's declared sample rate). Changing the frame rate
@@ -77,8 +89,24 @@ impl Shared {
         state
     }
 
-    pub fn set_status(&self, status: impl Into<String>) {
-        *self.status.lock().unwrap() = status.into();
+    pub fn set_status(&self, status: Status) {
+        *self.status.lock().unwrap() = status;
+    }
+
+    pub fn set_problem(&self, problem: impl Into<String>) {
+        self.set_status(Status::Problem(problem.into()));
+    }
+
+    /// One line for the Open Ephys editor, e.g. "running: Spinnaker: Chameleon3 ... (serial ...)".
+    pub fn status_line(&self) -> String {
+        match &*self.status.lock().unwrap() {
+            Status::Starting => "starting".into(),
+            Status::Running => match self.camera_description.lock().unwrap().as_str() {
+                "" => "running".into(),
+                camera => format!("running: {camera}"),
+            },
+            Status::Problem(problem) => problem.clone(),
+        }
     }
 
     pub fn request_repaint(&self) {
@@ -112,7 +140,7 @@ impl Tracker {
         let tracker = Tracker { shared, samples: rx, thread: Some(thread) };
         if config.show_window {
             if let Err(e) = tracker.open_window() {
-                tracker.shared.set_status(format!("no window: {e}"));
+                tracker.shared.set_problem(format!("no window: {e}"));
             }
         }
         tracker
@@ -170,7 +198,7 @@ fn capture_loop(shared: &Shared, camera_config: &CameraConfig, tx: &Sender<Track
         let mut camera = match camera::open(camera_config, shared.active_frame_rate) {
             Ok(c) => c,
             Err(e) => {
-                shared.set_status(format!("waiting for camera: {e}"));
+                shared.set_problem(format!("waiting for camera: {e}"));
                 let retry_at = Instant::now() + Duration::from_millis(500);
                 while !stopping() && Instant::now() < retry_at {
                     std::thread::sleep(Duration::from_millis(20));
@@ -178,8 +206,8 @@ fn capture_loop(shared: &Shared, camera_config: &CameraConfig, tx: &Sender<Track
                 continue;
             }
         };
-        let description = camera.description();
-        shared.set_status(if description.is_empty() { "running".to_string() } else { format!("running: {description}") });
+        *shared.camera_description.lock().unwrap() = camera.description();
+        shared.set_status(Status::Running);
         *shared.controls.lock().unwrap() = camera.controls();
         *shared.camera_warnings.lock().unwrap() = camera.warnings();
         let mut last: Option<(u64, f64)> = None;
@@ -202,7 +230,7 @@ fn capture_loop(shared: &Shared, camera_config: &CameraConfig, tx: &Sender<Track
                 Ok(Some(f)) => f,
                 Ok(None) => continue,
                 Err(e) => {
-                    shared.set_status(format!("camera error, reconnecting: {e}"));
+                    shared.set_problem(format!("camera error, reconnecting: {e}"));
                     break;
                 }
             };

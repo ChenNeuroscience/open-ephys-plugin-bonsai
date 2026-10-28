@@ -77,7 +77,7 @@ pub unsafe extern "C" fn tracker_poll(
 #[no_mangle]
 pub unsafe extern "C" fn tracker_status(handle: *const TrackerHandle, buf: *mut c_char, len: usize) -> usize {
     guard(0, || {
-        let status = (*handle).0.shared().status.lock().unwrap().clone();
+        let status = (*handle).0.shared().status_line();
         write_str(&status, buf, len)
     })
 }

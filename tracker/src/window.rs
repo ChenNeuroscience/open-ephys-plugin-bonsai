@@ -48,7 +48,7 @@ pub fn open(shared: Arc<Shared>) -> Result<(), String> {
                             winit::platform::x11::EventLoopBuilderExtX11::with_any_thread(builder, true);
                         }));
                         if let Err(e) = crate::gui::run(shared.clone(), options) {
-                            shared.set_status(format!("window failed: {e}"));
+                            shared.set_problem(format!("window failed: {e}"));
                         }
                         shared.window_open.store(false, Ordering::SeqCst);
                     }
