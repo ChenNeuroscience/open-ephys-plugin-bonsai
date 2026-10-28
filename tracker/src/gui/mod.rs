@@ -76,12 +76,28 @@ struct TrackerApp {
     /// Local copy, written back to `shared` whenever it changes.
     state: TrackerState,
     video: view::VideoView,
+    /// The frame rate warning is shown until this time (egui seconds), with the rate that triggered it.
+    rate_warning: Option<(f64, f64)>,
 }
+
+/// The frame rate warning to show at `now`: (shown until, triggering rate), renewed whenever the measured
+/// rate (0 = not measured yet) is off by more than `RATE_TOLERANCE`, and held for `RATE_WARNING_HOLD`.
+fn held_rate_warning(current: Option<(f64, f64)>, now: f64, measured: f64, active: f64) -> Option<(f64, f64)> {
+    if measured > 0.0 && (measured - active).abs() > RATE_TOLERANCE * active {
+        return Some((now + RATE_WARNING_HOLD, measured));
+    }
+    current.filter(|&(until, _)| now < until)
+}
+
+/// Measured and declared frame rates may differ by this fraction before the warning appears.
+const RATE_TOLERANCE: f64 = 0.02;
+/// Seconds the frame rate warning stays up after the last time it applied.
+const RATE_WARNING_HOLD: f64 = 10.0;
 
 impl TrackerApp {
     fn new(shared: Arc<Shared>, target_format: Option<eframe::wgpu::TextureFormat>) -> Self {
         let state = shared.state.lock().unwrap().clone();
-        TrackerApp { shared, state, video: view::VideoView::new(target_format) }
+        TrackerApp { shared, state, video: view::VideoView::new(target_format), rate_warning: None }
     }
 
     fn image_size(&self) -> [f32; 2] {
@@ -145,7 +161,7 @@ impl TrackerApp {
         egui::Grid::new("stats").num_columns(2).show(ui, |ui| {
             for (name, value) in [
                 ("Frames", stats.frames.to_string()),
-                ("Rate", format!("{:.1} fps", stats.fps)),
+                ("Rate", format!("{:.1} fps", if stats.measured_fps > 0.0 { stats.measured_fps } else { stats.fps })),
                 ("Processing", format!("{:.2} ms", stats.process_ms)),
                 ("Camera dropped", stats.camera_dropped.to_string()),
                 ("Queue dropped", stats.queue_dropped.to_string()),
@@ -177,24 +193,36 @@ impl TrackerApp {
             ui.weak(format!("Running at {active} fps; the new frame rate applies from the next acquisition."));
         }
 
-        // What matters is whether frames arrive at the declared rate, so only say something when they don't.
-        let amber = egui::Color32::from_rgb(230, 170, 60);
-        let stats = self.shared.stats.lock().unwrap().clone();
-        if stats.frames > 2 * active as u64 && (stats.fps as f64 - active).abs() > 0.02 * active {
-            ui.label(RichText::new(format!(
-                "Frames are arriving at {:.1} fps but the stream is declared at {active} fps, so samples will be \
-                 dropped or gap-filled. Set the camera's frame rate (e.g. in SpinView) or change it here.",
-                stats.fps
-            ))
-            .color(amber));
-            for warning in self.shared.camera_warnings.lock().unwrap().iter() {
-                ui.label(RichText::new(warning).color(amber).small());
-            }
-        } else {
-            for warning in self.shared.camera_warnings.lock().unwrap().iter() {
-                ui.weak(RichText::new(warning).small());
-            }
+        for warning in self.shared.camera_warnings.lock().unwrap().iter() {
+            ui.weak(RichText::new(warning).small());
         }
+    }
+
+    /// Warns, in the corner of the video, when frames arrive at a different rate from the stream's declared
+    /// one (which is what actually matters). Uses the rate over the last few seconds, and once shown stays
+    /// for at least `RATE_WARNING_HOLD` seconds so it doesn't flicker.
+    fn rate_warning(&mut self, ctx: &egui::Context) {
+        let now = ctx.input(|i| i.time);
+        let active = self.shared.active_frame_rate;
+        let measured = self.shared.stats.lock().unwrap().measured_fps as f64;
+        self.rate_warning = held_rate_warning(self.rate_warning, now, measured, active);
+        let Some((until, measured)) = self.rate_warning else { return };
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(until - now));
+
+        let amber = egui::Color32::from_rgb(230, 170, 60);
+        egui::Area::new(egui::Id::unique("rate_warning"))
+            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-14.0, -14.0))
+            .interactable(false)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).stroke(egui::Stroke::new(1.0, amber)).show(ui, |ui| {
+                    ui.set_max_width(340.0);
+                    ui.label(RichText::new(format!("Camera running at {measured:.1} fps, stream declared at {active} fps")).color(amber).strong());
+                    ui.label("Samples will be dropped or gap-filled. Set the camera's frame rate (e.g. in SpinView), or match it in the Camera section.");
+                    for warning in self.shared.camera_warnings.lock().unwrap().iter() {
+                        ui.label(RichText::new(warning).small().weak());
+                    }
+                });
+            });
     }
 
     fn detection(&mut self, ui: &mut egui::Ui) {
@@ -426,6 +454,8 @@ impl TrackerApp {
             egui::CentralPanel::default().show(ui, |ui| self.video.show(ui, &mut self.state, latest.as_ref()));
         }
 
+        self.rate_warning(ui.ctx());
+
         if self.state != before {
             *self.shared.state.lock().unwrap() = self.state.clone();
         }
@@ -452,7 +482,7 @@ mod tests {
     }
 
     /// Renders the whole window. Run with UPDATE_SNAPSHOTS=1 to accept changes; see tests/snapshots/.
-    fn window_snapshot(name: &str, recording: bool, configure: impl FnOnce(&mut TrackerState)) {
+    fn window_snapshot(name: &str, recording: bool, measured_fps: f32, configure: impl FnOnce(&mut TrackerState)) {
         let mut camera = SyntheticCamera::new(640, 480, 50.0);
         let frame = camera.next_frame().unwrap().unwrap();
         let mut state = TrackerState::default();
@@ -468,6 +498,7 @@ mod tests {
             active_frame_rate: 50.0,
             controls: camera.controls().into(),
             recording: recording.into(),
+            stats: crate::tracker::Stats { measured_fps, ..Default::default() }.into(),
             state: state.into(),
             ..Default::default()
         });
@@ -483,22 +514,39 @@ mod tests {
 
     #[test]
     fn window_crop_editable_rulers_locked() {
-        window_snapshot("tracker_window", false, |s| s.calibration.overlay.locked = true);
+        window_snapshot("tracker_window", false, 50.0, |s| s.calibration.overlay.locked = true);
     }
 
     #[test]
     fn window_detection_hidden() {
-        window_snapshot("tracker_window_detection_hidden", false, |s| s.detection_overlay.visible = false);
+        window_snapshot("tracker_window_detection_hidden", false, 50.0, |s| s.detection_overlay.visible = false);
+    }
+
+    #[test]
+    fn rate_warning_is_held_for_ten_seconds() {
+        let off = held_rate_warning(None, 100.0, 30.0, 50.0);
+        assert_eq!(off, Some((110.0, 30.0)));
+        // The rate recovers: still shown until the hold runs out, then gone.
+        assert_eq!(held_rate_warning(off, 109.9, 50.0, 50.0), off);
+        assert_eq!(held_rate_warning(off, 110.0, 50.0, 50.0), None);
+        // Within tolerance (2%) never triggers; nor does an unmeasured rate.
+        assert_eq!(held_rate_warning(None, 0.0, 50.9, 50.0), None);
+        assert_eq!(held_rate_warning(None, 0.0, 0.0, 50.0), None);
+    }
+
+    #[test]
+    fn window_rate_warning() {
+        window_snapshot("tracker_window_rate_warning", false, 30.0, |_| {});
     }
 
     #[test]
     fn window_recording() {
-        window_snapshot("tracker_window_recording", true, |_| {});
+        window_snapshot("tracker_window_recording", true, 50.0, |_| {});
     }
 
     #[test]
     fn window_crop_hidden() {
-        window_snapshot("tracker_window_crop_hidden", false, |s| s.crop_overlay.visible = false);
+        window_snapshot("tracker_window_crop_hidden", false, 50.0, |s| s.crop_overlay.visible = false);
     }
 
     /// Regenerates docs/screenshot.png from a live frame of tools/fake_camera.py (needs python3):

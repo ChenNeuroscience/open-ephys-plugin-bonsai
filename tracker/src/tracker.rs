@@ -11,6 +11,9 @@ use crate::camera::{self, CameraControls, Frame};
 use crate::config::{CameraConfig, Config, TrackerState};
 use crate::pipeline::{Blob, Pipeline, TrackerSample};
 
+/// Seconds of frames that `Stats::measured_fps` is counted over.
+const RATE_WINDOW: f64 = 5.0;
+
 /// Enough for tens of seconds at typical frame rates if Open Ephys stalls.
 const SAMPLE_QUEUE_LEN: usize = 4096;
 
@@ -28,6 +31,9 @@ pub struct Stats {
     /// Samples discarded because Open Ephys wasn't draining the queue.
     pub queue_dropped: u64,
     pub fps: f32,
+    /// Frame rate over the last `RATE_WINDOW` seconds of camera timestamps; 0 until that much has been seen.
+    /// Steadier than `fps`, so it's what the frame rate warning uses.
+    pub measured_fps: f32,
     pub process_ms: f32,
 }
 
@@ -173,6 +179,7 @@ fn capture_loop(shared: &Shared, camera_config: &CameraConfig, tx: &Sender<Track
         *shared.controls.lock().unwrap() = camera.controls();
         *shared.camera_warnings.lock().unwrap() = camera.warnings();
         let mut last: Option<(u64, f64)> = None;
+        let mut recent = std::collections::VecDeque::new(); // camera timestamps within RATE_WINDOW
         let mut applied = None;
 
         while !stopping() {
@@ -218,6 +225,14 @@ fn capture_loop(shared: &Shared, camera_config: &CameraConfig, tx: &Sender<Track
                     if dt > 0.0 {
                         stats.fps = if stats.fps == 0.0 { 1.0 / dt } else { 0.9 * stats.fps + 0.1 / dt };
                     }
+                }
+                recent.push_back(frame.timestamp);
+                while recent.front().is_some_and(|&t| t < frame.timestamp - RATE_WINDOW) {
+                    recent.pop_front();
+                }
+                let span = frame.timestamp - recent.front().copied().unwrap_or(frame.timestamp);
+                if span >= 0.95 * RATE_WINDOW {
+                    stats.measured_fps = ((recent.len() - 1) as f64 / span) as f32;
                 }
             }
             last = Some((frame.id, frame.timestamp));
