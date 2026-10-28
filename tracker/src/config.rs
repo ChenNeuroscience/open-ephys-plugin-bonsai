@@ -30,6 +30,39 @@ pub struct TrackerState {
     pub calibration: Calibration,
 }
 
+/// Identifies tracker settings on the clipboard (see [`export_settings`]).
+const SETTINGS_FORMAT: &str = "open-ephys-camera-tracker";
+const SETTINGS_VERSION: u32 = 1;
+
+#[derive(Serialize, Deserialize)]
+struct SettingsFile {
+    format: String,
+    version: u32,
+    settings: TrackerState,
+}
+
+/// The window's settings as JSON for copying between setups (e.g. from one saved Open Ephys signal chain to
+/// another), tagged so that other text isn't mistaken for them. The frame size isn't included: it comes
+/// from the camera.
+pub fn export_settings(state: &TrackerState) -> String {
+    let settings = TrackerState { frame_size: None, ..state.clone() };
+    let file = SettingsFile { format: SETTINGS_FORMAT.into(), version: SETTINGS_VERSION, settings };
+    serde_json::to_string_pretty(&file).expect("settings serialise")
+}
+
+/// Reads settings written by [`export_settings`]. Fields missing (e.g. from an older version) get defaults.
+pub fn import_settings(text: &str) -> Result<TrackerState, String> {
+    let file: SettingsFile =
+        serde_json::from_str(text.trim()).map_err(|_| "The clipboard doesn't contain tracker settings.".to_string())?;
+    if file.format != SETTINGS_FORMAT {
+        return Err("The clipboard doesn't contain tracker settings.".into());
+    }
+    if file.version > SETTINGS_VERSION {
+        return Err(format!("These settings are from a newer version of the plugin (format {}).", file.version));
+    }
+    Ok(file.settings)
+}
+
 /// Display state of something drawn over the video.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -295,6 +328,28 @@ mod tests {
         // Rotated by 90 degrees the long side runs vertically.
         assert!(crop.contains([50.0, 68.0]));
         assert!(!crop.contains([68.0, 50.0]));
+    }
+
+    #[test]
+    fn settings_round_trip_through_the_clipboard_format() {
+        let mut state = TrackerState { frame_size: Some([640, 480]), ..Default::default() };
+        state.pipeline.threshold = 123;
+        state.pipeline.crop = Crop::Circle { center: [1.0, 2.0], radius: 3.0 };
+        state.calibration.rulers.push(Ruler { a: [0.0, 0.0], b: [10.0, 0.0], length_cm: 5.0 });
+        let text = export_settings(&state);
+        let back = import_settings(&text).unwrap();
+        assert_eq!(back, TrackerState { frame_size: None, ..state });
+    }
+
+    #[test]
+    fn importing_rejects_other_text_and_fills_in_missing_fields() {
+        assert!(import_settings("hello").is_err());
+        assert!(import_settings(r#"{"format": "something-else", "version": 1, "settings": {}}"#).is_err());
+        assert!(import_settings(r#"{"format": "open-ephys-camera-tracker", "version": 99, "settings": {}}"#).is_err());
+        let partial = r#"{"format": "open-ephys-camera-tracker", "version": 1, "settings": {"pipeline": {"threshold": 77}}}"#;
+        let state = import_settings(partial).unwrap();
+        assert_eq!(state.pipeline.threshold, 77);
+        assert_eq!(state.pipeline.min_area, PipelineConfig::default().min_area);
     }
 
     #[test]

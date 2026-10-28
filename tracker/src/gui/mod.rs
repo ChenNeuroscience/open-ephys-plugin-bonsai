@@ -79,6 +79,8 @@ struct TrackerApp {
     video: view::VideoView,
     /// The frame rate warning is shown until this time (egui seconds), with the rate that triggered it.
     rate_warning: Option<(f64, f64)>,
+    /// Result of the last copy/paste of settings, shown until this time (egui seconds).
+    clipboard_note: Option<(f64, String)>,
 }
 
 /// The frame rate warning to show at `now`: (shown until, triggering rate), renewed whenever the measured
@@ -120,7 +122,7 @@ const RATE_WARNING_HOLD: f64 = 10.0;
 impl TrackerApp {
     fn new(shared: Arc<Shared>, target_format: Option<eframe::wgpu::TextureFormat>) -> Self {
         let state = shared.state.lock().unwrap().clone();
-        TrackerApp { shared, state, video: view::VideoView::new(target_format), rate_warning: None }
+        TrackerApp { shared, state, video: view::VideoView::new(target_format), rate_warning: None, clipboard_note: None }
     }
 
     fn image_size(&self) -> [f32; 2] {
@@ -131,6 +133,7 @@ impl TrackerApp {
         ui.heading("Tracker");
         ui.label(self.shared.status.lock().unwrap().as_str());
         let recording = self.shared.recording.load(Ordering::Relaxed);
+        self.copy_paste(ui, recording);
         if recording {
             let red = egui::Color32::from_rgb(230, 70, 70);
             ui.horizontal(|ui| {
@@ -177,6 +180,43 @@ impl TrackerApp {
             |ui| self.calibration(ui),
         );
         self.state.calibration.overlay = overlay;
+    }
+
+    /// Copy/paste of all the window's settings as JSON, e.g. to reuse them in another saved signal chain.
+    fn copy_paste(&mut self, ui: &mut egui::Ui, recording: bool) {
+        let now = ui.input(|i| i.time);
+        ui.horizontal(|ui| {
+            if ui.button("Copy settings").on_hover_text("Copy all of these settings to the clipboard").clicked() {
+                ui.ctx().copy_text(crate::config::export_settings(&self.state));
+                self.clipboard_note = Some((now + 4.0, "Settings copied.".into()));
+            }
+            let paste = ui
+                .add_enabled(!recording, egui::Button::new("Paste settings"))
+                .on_hover_text("Replace all of these settings with ones copied from another setup");
+            if paste.clicked() {
+                let result = arboard::Clipboard::new()
+                    .and_then(|mut c| c.get_text())
+                    .map_err(|_| "Couldn't read the clipboard.".to_string())
+                    .and_then(|text| crate::config::import_settings(&text));
+                let note = match result {
+                    Ok(pasted) => {
+                        // The frame size belongs to the camera, not the settings.
+                        self.state = TrackerState { frame_size: self.state.frame_size, ..pasted };
+                        "Settings pasted.".to_string()
+                    }
+                    Err(e) => e,
+                };
+                self.clipboard_note = Some((now + 6.0, note));
+            }
+        });
+        if let Some((until, note)) = &self.clipboard_note {
+            if now < *until {
+                ui.weak(note.as_str());
+                ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(until - now));
+            } else {
+                self.clipboard_note = None;
+            }
+        }
     }
 
     fn stats(&mut self, ui: &mut egui::Ui) {

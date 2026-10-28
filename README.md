@@ -44,7 +44,9 @@ While acquisition runs, a tracker window shows the live video with:
 The eye and padlock sit in each section's header. The padlock locks that section's controls and stops its
 overlay being dragged on the video. While Open Ephys is recording, all settings are locked.
 
-These settings are saved with the Open Ephys signal chain. If you close the window during acquisition,
+These settings are saved with the Open Ephys signal chain. **Copy settings** / **Paste settings** move
+them between setups, e.g. from one saved signal chain to another (Open Ephys has no way to copy part of a
+saved configuration). They're JSON tagged as tracker settings, so pasting anything else is refused. If you close the window during acquisition,
 **Open window** in the plugin's editor brings it back.
 
 > **macOS:** the tracker window can't open inside Open Ephys on macOS (only the main thread can create
