@@ -40,7 +40,8 @@ pub fn led_chart(ui: &mut egui::Ui, history: &VecDeque<(f64, [u32; 2])>) {
         .allow_boxed_zoom(false)
         .allow_double_click_reset(false)
         .show(ui, |plot| {
-            plot.set_plot_bounds(PlotBounds::from_min_max([-0.3, 0.0], [LED_HISTORY + 0.2, top])); // room for the end ticks
+            // Starts exactly at 0 s; a little room after the last second suggests the not-yet-happened future.
+            plot.set_plot_bounds(PlotBounds::from_min_max([0.0, 0.0], [LED_HISTORY + 0.2, top]));
             for (i, name) in ["Big", "Small"].into_iter().enumerate() {
                 for run in seen_runs(history, i, start) {
                     plot.line(Line::new(name, run).color(colours[i]).width(2.0));
