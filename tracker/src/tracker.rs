@@ -42,6 +42,8 @@ pub struct Shared {
     /// The frame rate this acquisition runs at (the stream's declared sample rate). Changing the frame rate
     /// in the state takes effect from the next acquisition.
     pub active_frame_rate: f64,
+    /// Open Ephys is recording: the window locks all settings.
+    pub recording: AtomicBool,
     /// The tracker window is open, or has been asked to open.
     pub window_open: AtomicBool,
     /// What the open camera supports, refreshed after settings are applied.

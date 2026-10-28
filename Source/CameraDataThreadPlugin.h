@@ -89,6 +89,9 @@ namespace CameraTracker {
         /** True if the frame rate was changed in the tracker window since the stream's sample rate was declared */
         bool isStreamRateStale();
 
+        /** Locks the tracker window's settings while recording */
+        void setRecording(bool recording);
+
         /** Reopens the tracker window (or brings it to the front). False if not acquiring or not supported (macOS). */
         bool openTrackerWindow();
 

@@ -66,7 +66,17 @@ namespace CameraTracker {
 		getParameterEditor("camera_address")->setVisible(kind == "fake");
 	}
 
+	void DataThreadPluginEditor::startRecording() {
+		thread->setRecording(true);
+	}
+
+	void DataThreadPluginEditor::stopRecording() {
+		thread->setRecording(false);
+	}
+
 	void DataThreadPluginEditor::timerCallback() {
+		// Also synced here in case recording started before the tracker did.
+		thread->setRecording(CoreServices::getRecordingStatus());
 		// A frame rate changed in the tracker window becomes the stream's sample rate once acquisition stops.
 		if (!CoreServices::getAcquisitionStatus() && thread->isStreamRateStale()) {
 			CoreServices::updateSignalChain(this);

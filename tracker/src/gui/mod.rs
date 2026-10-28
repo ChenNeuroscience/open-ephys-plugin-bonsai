@@ -91,18 +91,27 @@ impl TrackerApp {
     fn controls(&mut self, ui: &mut egui::Ui) {
         ui.heading("Tracker");
         ui.label(self.shared.status.lock().unwrap().as_str());
+        let recording = self.shared.recording.load(Ordering::Relaxed);
+        if recording {
+            let red = egui::Color32::from_rgb(230, 70, 70);
+            ui.horizontal(|ui| {
+                let (dot, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                ui.painter().circle_filled(dot.center(), 4.5, red);
+                ui.label(RichText::new("Recording: settings are locked").color(red));
+            });
+        }
         ui.add_space(4.0);
 
         egui::CollapsingHeader::new(RichText::new("Stats").strong()).default_open(true).show(ui, |ui| self.stats(ui));
 
         let mut locked = self.state.camera_locked;
-        section(ui, "Camera", None, (&mut locked, "Lock the camera settings"), |ui| self.camera(ui));
+        section(ui, "Camera", recording, None, (&mut locked, "Lock the camera settings"), |ui| self.camera(ui));
         self.state.camera_locked = locked;
 
         let mut overlay = self.state.detection_overlay;
         section(
             ui,
-            "Detection",
+            "Detection", recording,
             Some((&mut overlay.visible, "Highlight pixels above the threshold and circle the detected regions")),
             (&mut overlay.locked, "Lock the detection settings"),
             |ui| self.detection(ui),
@@ -112,7 +121,7 @@ impl TrackerApp {
         let mut overlay = self.state.crop_overlay;
         section(
             ui,
-            "Crop",
+            "Crop", recording,
             Some((&mut overlay.visible, "Show the whole frame with the crop outline, or hide it and mask out everything outside the crop")),
             (&mut overlay.locked, "Lock the crop. Unlocked: drag inside to move, drag the square handles to resize, and the round \
              handle on the stalk to rotate (hold shift to snap to 15°)"),
@@ -123,7 +132,7 @@ impl TrackerApp {
         let mut overlay = self.state.calibration.overlay;
         section(
             ui,
-            "Calibration",
+            "Calibration", recording,
             Some((&mut overlay.visible, "Show or hide the rulers (they still count towards px/m)")),
             (&mut overlay.locked, "Lock the rulers so they can't be dragged or edited"),
             |ui| self.calibration(ui),
@@ -279,9 +288,11 @@ impl TrackerApp {
 
 /// A collapsible section whose header carries eye (overlay visibility) and padlock (lock) toggles.
 /// Locking stops the overlay being dragged on the video; each section also disables its own controls.
+/// While `recording`, the section is forced locked whatever its own padlock says (the eye still works).
 fn section(
     ui: &mut egui::Ui,
     title: &str,
+    recording: bool,
     visible: Option<(&mut bool, &str)>,
     (locked, lock_tip): (&mut bool, &str),
     body: impl FnOnce(&mut egui::Ui),
@@ -291,13 +302,22 @@ fn section(
         .show_header(ui, |ui| {
             ui.label(RichText::new(title).strong());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                icons::toggle(ui, locked, icons::padlock, lock_tip);
+                if recording {
+                    ui.add_enabled_ui(false, |ui| icons::toggle(ui, &mut true, icons::padlock, "Locked while recording"));
+                } else {
+                    icons::toggle(ui, locked, icons::padlock, lock_tip);
+                }
                 if let Some((visible, eye_tip)) = visible {
                     icons::toggle(ui, visible, icons::eye, eye_tip);
                 }
             });
         })
-        .body(body);
+        .body(|ui| {
+            if recording {
+                ui.disable();
+            }
+            body(ui)
+        });
 }
 
 /// A camera setting that may be left as the camera has it, automatic, or set manually.
@@ -367,7 +387,15 @@ impl TrackerApp {
             egui::ScrollArea::vertical().show(ui, |ui| self.controls(ui));
         });
         let latest = self.shared.latest.lock().unwrap().clone();
-        egui::CentralPanel::default().show(ui, |ui| self.video.show(ui, &mut self.state, latest.as_ref()));
+        if self.shared.recording.load(Ordering::Relaxed) {
+            // Draw from a copy with every overlay locked, so nothing can be dragged while recording.
+            let mut locked = self.state.clone();
+            locked.crop_overlay.locked = true;
+            locked.calibration.overlay.locked = true;
+            egui::CentralPanel::default().show(ui, |ui| self.video.show(ui, &mut locked, latest.as_ref()));
+        } else {
+            egui::CentralPanel::default().show(ui, |ui| self.video.show(ui, &mut self.state, latest.as_ref()));
+        }
 
         if self.state != before {
             *self.shared.state.lock().unwrap() = self.state.clone();
@@ -395,7 +423,7 @@ mod tests {
     }
 
     /// Renders the whole window. Run with UPDATE_SNAPSHOTS=1 to accept changes; see tests/snapshots/.
-    fn window_snapshot(name: &str, configure: impl FnOnce(&mut TrackerState)) {
+    fn window_snapshot(name: &str, recording: bool, configure: impl FnOnce(&mut TrackerState)) {
         let mut camera = SyntheticCamera::new(640, 480, 50.0);
         let frame = camera.next_frame().unwrap().unwrap();
         let mut state = TrackerState::default();
@@ -409,6 +437,7 @@ mod tests {
         let shared = Arc::new(Shared {
             active_frame_rate: 50.0,
             controls: camera.controls().into(),
+            recording: recording.into(),
             state: state.into(),
             ..Default::default()
         });
@@ -424,17 +453,22 @@ mod tests {
 
     #[test]
     fn window_crop_editable_rulers_locked() {
-        window_snapshot("tracker_window", |s| s.calibration.overlay.locked = true);
+        window_snapshot("tracker_window", false, |s| s.calibration.overlay.locked = true);
     }
 
     #[test]
     fn window_detection_hidden() {
-        window_snapshot("tracker_window_detection_hidden", |s| s.detection_overlay.visible = false);
+        window_snapshot("tracker_window_detection_hidden", false, |s| s.detection_overlay.visible = false);
+    }
+
+    #[test]
+    fn window_recording() {
+        window_snapshot("tracker_window_recording", true, |_| {});
     }
 
     #[test]
     fn window_crop_hidden() {
-        window_snapshot("tracker_window_crop_hidden", |s| s.crop_overlay.visible = false);
+        window_snapshot("tracker_window_crop_hidden", false, |s| s.crop_overlay.visible = false);
     }
 
     /// Regenerates docs/screenshot.png from a live frame of tools/fake_camera.py (needs python3):

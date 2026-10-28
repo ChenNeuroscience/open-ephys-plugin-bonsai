@@ -37,7 +37,7 @@ While acquisition runs, a tracker window shows the live video with:
 - Stats: frame rate, processing time, dropped frames.
 
 The eye and padlock sit in each section's header. The padlock locks that section's controls and stops its
-overlay being dragged on the video.
+overlay being dragged on the video. While Open Ephys is recording, all settings are locked.
 
 These settings are saved with the Open Ephys signal chain. If you close the window during acquisition,
 **Open window** in the plugin's editor brings it back.

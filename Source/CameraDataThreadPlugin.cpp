@@ -190,6 +190,13 @@ namespace CameraTracker {
         }
     }
 
+    void DataThreadPlugin::setRecording(bool recording)
+    {
+        if (tracker) {
+            tracker_set_recording(tracker, recording);
+        }
+    }
+
     bool DataThreadPlugin::openTrackerWindow()
     {
         return tracker && tracker_open_window(tracker);

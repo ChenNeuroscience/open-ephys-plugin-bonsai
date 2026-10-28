@@ -81,6 +81,19 @@ pub unsafe extern "C" fn tracker_status(handle: *const TrackerHandle, buf: *mut 
     })
 }
 
+/// Tells the tracker whether Open Ephys is recording; settings can't be changed in the window while it is.
+///
+/// # Safety
+/// `handle` must come from `tracker_start`.
+#[no_mangle]
+pub unsafe extern "C" fn tracker_set_recording(handle: *const TrackerHandle, recording: bool) {
+    guard((), || {
+        let shared = (*handle).0.shared();
+        shared.recording.store(recording, std::sync::atomic::Ordering::Relaxed);
+        shared.request_repaint();
+    })
+}
+
 /// Opens the tracker window if the user closed it, or brings it to the front. Returns false if the window
 /// isn't supported here (macOS) or couldn't be opened.
 ///

@@ -27,6 +27,9 @@ int64_t tracker_poll(const TrackerHandle* handle, TrackerSample* out, size_t max
 /* Writes a NUL-terminated status line into buf; returns its untruncated length. */
 size_t tracker_status(const TrackerHandle* handle, char* buf, size_t len);
 
+/* Whether Open Ephys is recording; the tracker window locks all settings while it is. */
+void tracker_set_recording(const TrackerHandle* handle, bool recording);
+
 /* Opens the tracker window if it was closed, or brings it to the front. Returns false where the window isn't
    supported (macOS). */
 bool tracker_open_window(const TrackerHandle* handle);
