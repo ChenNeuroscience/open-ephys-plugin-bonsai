@@ -25,13 +25,13 @@ pub fn toggle(ui: &mut egui::Ui, label: &str, open: bool) -> egui::Response {
     if ui.is_rect_visible(rect) {
         let colour = if response.hovered() { ui.visuals().strong_text_color() } else { colour };
         ui.painter().galley(egui::pos2(rect.left(), rect.center().y - galley.size().y / 2.0), galley, colour);
-        // Pointing right when closed and down when open, like egui's own collapsing headers.
+        // Pointing left (towards the label) when closed and down when open.
         let c = egui::pos2(rect.right() - icon / 2.0, rect.center().y);
         let h = icon / 2.0;
         let points = if open {
             vec![c + egui::vec2(-h, -h / 2.0), c + egui::vec2(h, -h / 2.0), c + egui::vec2(0.0, h * 0.75)]
         } else {
-            vec![c + egui::vec2(-h / 2.0, -h), c + egui::vec2(h * 0.75, 0.0), c + egui::vec2(-h / 2.0, h)]
+            vec![c + egui::vec2(h / 2.0, -h), c + egui::vec2(h / 2.0, h), c + egui::vec2(-h * 0.75, 0.0)]
         };
         ui.painter().add(egui::Shape::convex_polygon(points, colour, egui::Stroke::NONE));
     }
