@@ -201,15 +201,21 @@ namespace CameraTracker {
 
     void DataThreadPlugin::refreshMetadata()
     {
-        if (!metadataPixelsPerMetre) {
-            return; // updateSettings hasn't run yet
+        if (!metadataPixelsPerMetre || CoreServices::getRecordingStatus()) {
+            return; // updateSettings hasn't run yet, or recording (settings are locked, and record engines may be reading)
         }
         TrackerMetadata m;
         if (!tracker_metadata(currentTrackerState().toRawUTF8(), &m)) {
             return;
         }
+        // Only write when something changed: record engines read these from the record thread. (Byte comparison,
+        // so a NaN pixels_per_metre compares equal to itself.)
+        if (std::memcmp(&m, &writtenMetadata, sizeof(m)) == 0) {
+            return;
+        }
+        writtenMetadata = m;
         // Downstream copies of the stream share these value objects, so this updates what record engines
-        // see too. Settings are locked while recording, so the values are stable for a recording.
+        // see too.
         // Explicit template arguments pick the array overloads that Open Ephys exports (setValue<T>(const T*)).
         metadataPixelsPerMetre->setValue<double>(m.pixels_per_metre);
         metadataWindow->setValue<int32>(static_cast<const int32*>(m.window));
@@ -295,6 +301,7 @@ namespace CameraTracker {
             *f.value = new MetadataValue(descriptor);
             stream->addMetadata(new MetadataDescriptor(descriptor), f.value->get());
         }
+        std::memset(&writtenMetadata, 0xFF, sizeof(writtenMetadata)); // force the first write
         refreshMetadata();
 
         // we don't currently use the event channel for anything but the RecordEngine requires one (or it crashes on startup)

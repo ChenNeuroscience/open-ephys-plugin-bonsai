@@ -123,6 +123,7 @@ private:
 
     /** Stream metadata values (shared with downstream copies of the stream), updated by refreshMetadata() */
     MetadataValuePtr metadataPixelsPerMetre, metadataWindow, metadataCrop, metadataFrameSize;
+    TrackerMetadata writtenMetadata; // last values written to the above
 
     TrackerHandle* tracker = nullptr;
     double declaredFrameRate = 0;

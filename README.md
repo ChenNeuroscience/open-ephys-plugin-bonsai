@@ -67,9 +67,10 @@ square(cx,cy,w,deg) 320 240 400 45
 rectangle(cx,cy,w,h,deg) 330 250 420 300 17.19
 ```
 
-The fields are created when the signal chain updates. The plugin then keeps their values up to date in
-place as the window changes, so they're current when recording starts. They can't change during a
-recording, because settings are locked while recording. Reading them from the stream:
+The fields are created when the signal chain updates. The plugin then updates their values in place
+(checked every 250 ms, written only when they change) as the window changes, so they're current when
+recording starts, unless a setting changed in the last quarter-second. They're never written while
+recording: settings are locked then, and record engines read them from the record thread. Reading them from the stream:
 
 ```cpp
 const DataStream* stream = nullptr; // the stream of the channel you identified as the camera's

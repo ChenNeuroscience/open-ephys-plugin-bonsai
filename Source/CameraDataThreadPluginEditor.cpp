@@ -68,7 +68,6 @@ namespace CameraTracker {
 
 	void DataThreadPluginEditor::startRecording() {
 		thread->setRecording(true);
-		thread->refreshMetadata();
 	}
 
 	void DataThreadPluginEditor::stopRecording() {
