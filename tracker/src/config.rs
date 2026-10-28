@@ -115,11 +115,40 @@ pub struct PipelineConfig {
     pub max_area: Option<u32>,
     /// Only pixels inside this region are considered.
     pub crop: Crop,
+    /// Reduced gain near the crop boundary, to suppress LED reflections off the walls.
+    pub edge: EdgeGain,
 }
 
 impl Default for PipelineConfig {
     fn default() -> Self {
-        PipelineConfig { threshold: 200, min_area: 5, max_area: None, crop: Crop::None }
+        PipelineConfig { threshold: 200, min_area: 5, max_area: None, crop: Crop::None, edge: EdgeGain::default() }
+    }
+}
+
+impl PipelineConfig {
+    /// The threshold for pixels within the edge band: a pixel counts if its value, scaled down by the edge
+    /// gain, is still above `threshold`. 255 means nothing there can count.
+    pub fn edge_threshold(&self) -> u8 {
+        if self.edge.width <= 0.0 || self.crop == Crop::None {
+            return self.threshold;
+        }
+        let gain = 10f32.powf(-self.edge.reduction_db.max(0.0) / 20.0);
+        (self.threshold as f32 / gain).floor().min(255.0) as u8
+    }
+}
+
+/// Pixels within `width` of the crop boundary have their gain reduced by `reduction_db`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EdgeGain {
+    /// Pixels; 0 turns it off.
+    pub width: f32,
+    pub reduction_db: f32,
+}
+
+impl Default for EdgeGain {
+    fn default() -> Self {
+        EdgeGain { width: 0.0, reduction_db: 6.0 }
     }
 }
 
@@ -179,6 +208,20 @@ impl Crop {
         let min = |v: [f32; 4]| v.into_iter().fold(f32::INFINITY, f32::min);
         let max = |v: [f32; 4]| v.into_iter().fold(f32::NEG_INFINITY, f32::max);
         Some([min(xs), min(ys), max(xs), max(ys)])
+    }
+
+    /// The points at least `d` inside the boundary, which for these shapes is the same shape shrunk by `d`.
+    /// `None` if nothing is left (or there's no crop).
+    pub fn inset(&self, d: f32) -> Option<Crop> {
+        match *self {
+            Crop::None => None,
+            Crop::Circle { center, radius } => (radius > d).then_some(Crop::Circle { center, radius: radius - d }),
+            Crop::Square { center, size, angle } => {
+                (size > 2.0 * d).then_some(Crop::Square { center, size: size - 2.0 * d, angle })
+            }
+            Crop::Rectangle { center, width, height, angle } => (width > 2.0 * d && height > 2.0 * d)
+                .then_some(Crop::Rectangle { center, width: width - 2.0 * d, height: height - 2.0 * d, angle }),
+        }
     }
 
     pub fn set_center(&mut self, c: [f32; 2]) {

@@ -220,7 +220,7 @@ impl TrackerApp {
 
     fn crop(&mut self, ui: &mut egui::Ui) {
         let image = self.image_size();
-        let TrackerState { pipeline: PipelineConfig { crop, .. }, crop_overlay: overlay, .. } = &mut self.state;
+        let TrackerState { pipeline: PipelineConfig { crop, edge, .. }, crop_overlay: overlay, .. } = &mut self.state;
         if overlay.locked {
             ui.disable();
         }
@@ -261,6 +261,16 @@ impl TrackerApp {
                     angle_row(ui, angle);
                 }
             }
+            ui.label("Near edge").on_hover_text(
+                "Reduce the gain of pixels this close to the crop boundary, so LED reflections off the walls \
+                 don't count. The dashed line shows where the reduction stops.",
+            );
+            ui.horizontal(|ui| {
+                ui.add(egui::DragValue::new(&mut edge.reduction_db).range(0.0..=40.0).speed(0.1).prefix("−").suffix(" dB"));
+                ui.label("within");
+                ui.add(egui::DragValue::new(&mut edge.width).range(0.0..=1000.0).speed(0.5).suffix(" px"));
+            });
+            ui.end_row();
         });
     }
 
@@ -447,6 +457,7 @@ mod tests {
         let frame = camera.next_frame().unwrap().unwrap();
         let mut state = TrackerState::default();
         state.pipeline.crop = Crop::Rectangle { center: [330.0, 250.0], width: 420.0, height: 300.0, angle: 0.3 };
+        state.pipeline.edge = crate::config::EdgeGain { width: 25.0, reduction_db: 6.0 };
         state.calibration.rulers = vec![
             Ruler { a: [120.0, 420.0], b: [480.0, 420.0], length_cm: 100.0 },
             Ruler { a: [560.0, 80.0], b: [560.0, 260.0], length_cm: 0.0 },

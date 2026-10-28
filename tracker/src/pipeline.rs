@@ -60,29 +60,48 @@ struct Run {
 }
 
 /// The crop as one span of columns per row (crops are convex, so the inside of a row is contiguous),
-/// rebuilt only when the crop or frame size changes.
+/// rebuilt only when the crop, edge width or frame size changes.
 #[derive(Default)]
 struct SpanCache {
-    key: Option<(Crop, u32, u32)>,
-    /// Per row, start..end columns; empty if start >= end.
-    spans: Vec<(u32, u32)>,
+    key: Option<(Crop, f32, u32, u32)>,
+    spans: Vec<RowSpans>,
+}
+
+/// Columns of one row, as start..end (empty if start >= end).
+#[derive(Clone, Copy)]
+struct RowSpans {
+    /// Inside the crop.
+    outer: (u32, u32),
+    /// Inside the crop and outside the edge band (all of `outer` when there's no band).
+    inner: (u32, u32),
 }
 
 impl SpanCache {
-    fn get(&mut self, crop: &Crop, width: u32, height: u32) -> &[(u32, u32)] {
-        let key = (*crop, width, height);
+    fn get(&mut self, crop: &Crop, edge_width: f32, width: u32, height: u32) -> &[RowSpans] {
+        let key = (*crop, edge_width, width, height);
         if self.key != Some(key) {
-            self.spans = (0..height).map(|y| row_span(crop, y, width)).collect();
+            self.spans = (0..height).map(|y| row_spans(crop, edge_width, y, width)).collect();
             self.key = Some(key);
         }
         &self.spans
     }
 }
 
-/// Rasterised crop (255 inside, 0 outside), rebuilt only when the crop or frame size changes.
+fn row_spans(crop: &Crop, edge_width: f32, y: u32, width: u32) -> RowSpans {
+    let outer = row_span(crop, y, width);
+    let inner = if edge_width <= 0.0 || *crop == Crop::None {
+        outer
+    } else {
+        crop.inset(edge_width).map_or((0, 0), |inset| row_span(&inset, y, width))
+    };
+    RowSpans { outer, inner }
+}
+
+/// Rasterised crop (255 inside, 128 in the edge band, 0 outside), rebuilt only when the crop, edge width or
+/// frame size changes.
 #[derive(Default)]
 pub struct MaskCache {
-    key: Option<(Crop, u32, u32)>,
+    key: Option<(Crop, f32, u32, u32)>,
     mask: Option<Arc<GrayImage>>,
 }
 
@@ -144,26 +163,31 @@ pub fn row_span(crop: &Crop, y: u32, width: u32) -> (u32, u32) {
 
 impl MaskCache {
     /// `None` when there's no crop, i.e. everything is inside.
-    pub fn get(&mut self, crop: &Crop, width: u32, height: u32) -> Option<&GrayImage> {
-        self.update(crop, width, height);
+    pub fn get(&mut self, crop: &Crop, edge_width: f32, width: u32, height: u32) -> Option<&GrayImage> {
+        self.update(crop, edge_width, width, height);
         self.mask.as_deref()
     }
 
     /// Like [`MaskCache::get`], but shareable; the same `Arc` is returned until the mask changes.
-    pub fn get_shared(&mut self, crop: &Crop, width: u32, height: u32) -> Option<Arc<GrayImage>> {
-        self.update(crop, width, height);
+    pub fn get_shared(&mut self, crop: &Crop, edge_width: f32, width: u32, height: u32) -> Option<Arc<GrayImage>> {
+        self.update(crop, edge_width, width, height);
         self.mask.clone()
     }
 
-    fn update(&mut self, crop: &Crop, width: u32, height: u32) {
-        let key = (*crop, width, height);
+    fn update(&mut self, crop: &Crop, edge_width: f32, width: u32, height: u32) {
+        let key = (*crop, edge_width, width, height);
         if self.key != Some(key) {
             self.mask = (*crop != Crop::None).then(|| {
                 let mut mask = GrayImage::new(width, height);
                 for (y, row) in mask.rows_mut().enumerate() {
-                    let (start, end) = row_span(crop, y as u32, width);
-                    for p in row.skip(start as usize).take(end.saturating_sub(start) as usize) {
-                        *p = Luma([255]);
+                    let RowSpans { outer, inner } = row_spans(crop, edge_width, y as u32, width);
+                    for (x, p) in row.enumerate() {
+                        let x = x as u32;
+                        if x >= inner.0 && x < inner.1 {
+                            *p = Luma([255]);
+                        } else if x >= outer.0 && x < outer.1 {
+                            *p = Luma([128]);
+                        }
                     }
                 }
                 Arc::new(mask)
@@ -177,28 +201,35 @@ impl Pipeline {
     /// Returns blobs passing the area filter, largest first.
     pub fn process(&mut self, image: &GrayImage, config: &PipelineConfig) -> Vec<Blob> {
         let (width, height) = image.dimensions();
-        let spans = self.spans.get(&config.crop, width, height);
+        let spans = self.spans.get(&config.crop, config.edge.width, width, height);
         let raw = image.as_raw();
         let threshold = config.threshold;
+        let edge_threshold = config.edge_threshold(); // >= threshold
         let (runs, parent) = (&mut self.runs, &mut self.parent);
         runs.clear();
         parent.clear();
 
         let mut prev_row = 0..0; // indices of the previous row's runs
-        for (y, &(start, end)) in spans.iter().enumerate() {
+        for (y, spans) in spans.iter().enumerate() {
             let first_run = runs.len();
+            let (start, end) = spans.outer;
             if start < end {
                 let offset = y * width as usize;
                 let row = &raw[offset + start as usize..offset + end as usize];
                 if row.iter().fold(0u8, |m, &v| m.max(v)) > threshold {
+                    // The edge band (outside `inner`) has the higher threshold.
+                    let inner = (spans.inner.0.saturating_sub(start) as usize, spans.inner.1.saturating_sub(start) as usize);
+                    let foreground = |x: usize| {
+                        row[x] > if x >= inner.0 && x < inner.1 { threshold } else { edge_threshold }
+                    };
                     let mut x = 0;
                     while x < row.len() {
-                        if row[x] <= threshold {
+                        if !foreground(x) {
                             x += 1;
                             continue;
                         }
                         let run_start = x;
-                        while x < row.len() && row[x] > threshold {
+                        while x < row.len() && foreground(x) {
                             x += 1;
                         }
                         let (x0, x1) = (start + run_start as u32, start + x as u32);
@@ -279,6 +310,7 @@ fn union(parent: &mut [u32], a: usize, b: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::EdgeGain;
     use imageproc::drawing::draw_filled_rect_mut;
     use imageproc::rect::Rect;
 
@@ -312,9 +344,14 @@ mod tests {
     /// The previous, straightforward implementation (mask, label every pixel, accumulate), as a reference.
     fn reference_process(image: &GrayImage, config: &PipelineConfig) -> Vec<Blob> {
         use imageproc::region_labelling::{connected_components, Connectivity};
+        let inset = config.crop.inset(config.edge.width);
+        let banded = config.edge.width > 0.0 && config.crop != Crop::None;
         let binary = GrayImage::from_fn(image.width(), image.height(), |x, y| {
-            let inside = config.crop.contains([x as f32 + 0.5, y as f32 + 0.5]);
-            Luma([if inside && image.get_pixel(x, y)[0] > config.threshold { 255 } else { 0 }])
+            let p = [x as f32 + 0.5, y as f32 + 0.5];
+            let inside = config.crop.contains(p);
+            let in_band = banded && !inset.is_some_and(|i| i.contains(p));
+            let threshold = if in_band { config.edge_threshold() } else { config.threshold };
+            Luma([if inside && image.get_pixel(x, y)[0] > threshold { 255 } else { 0 }])
         });
         let labels = connected_components(&binary, Connectivity::Eight, Luma([0]));
         let mut accums: Vec<(u32, u64, u64)> = Vec::new();
@@ -353,7 +390,9 @@ mod tests {
             let (w, h) = (20 + rand(60), 20 + rand(60));
             // Sparse to dense foreground, so regions range from specks to large tangled shapes.
             let density = rand(100);
-            let img = GrayImage::from_fn(w, h, |_, _| Luma([if rand(100) < density { 200 } else { 50 }]));
+            let img = GrayImage::from_fn(w, h, |_, _| {
+                Luma([if rand(100) < density { [120, 200][rand(2) as usize] } else { 50 }])
+            });
             let center = [rand(w) as f32, rand(h) as f32];
             let crop = match case % 4 {
                 0 => Crop::None,
@@ -366,11 +405,30 @@ mod tests {
                     angle: rand(628) as f32 / 100.0,
                 },
             };
-            let config = PipelineConfig { threshold: 100, min_area: rand(3), max_area: None, crop };
+            // Half the cases dim an edge band; at 3 dB the band threshold is 141, so values of 120 and 200
+            // land on different sides of it.
+            let edge = EdgeGain { width: if case % 8 < 4 { 0.0 } else { rand(15) as f32 }, reduction_db: 3.0 };
+            let config = PipelineConfig { threshold: 100, min_area: rand(3), max_area: None, crop, edge };
             let ours = sorted(Pipeline::default().process(&img, &config));
             let reference = sorted(reference_process(&img, &config));
             assert_eq!(ours, reference, "case {case}: {w}x{h}, density {density}%, {crop:?}");
         }
+    }
+
+    #[test]
+    fn edge_band_suppresses_reflections_near_the_wall() {
+        let mut img = GrayImage::from_pixel(200, 200, Luma([10]));
+        draw_filled_rect_mut(&mut img, Rect::at(30, 98).of_size(4, 4), Luma([220])); // near the left edge
+        draw_filled_rect_mut(&mut img, Rect::at(98, 98).of_size(4, 4), Luma([220])); // in the middle
+        let crop = Crop::Square { center: [100.0, 100.0], size: 180.0, angle: 0.0 }; // left edge at x=10
+        let mut config = PipelineConfig { crop, ..Default::default() };
+        assert_eq!(Pipeline::default().process(&img, &config).len(), 2);
+
+        // Within 30 px of the boundary at -6 dB, 220 becomes 110, below the threshold of 200. (The band's
+        // threshold would be 200 / 0.5 = 399, so nothing there can count.)
+        config.edge = EdgeGain { width: 30.0, reduction_db: 6.0 };
+        assert_eq!(config.edge_threshold(), 255);
+        assert_eq!(Pipeline::default().process(&img, &config), vec![Blob { x: 99.5, y: 99.5, area: 16 }]);
     }
 
     #[test]
@@ -449,7 +507,7 @@ mod bench {
         for i in 0..n {
             let crop = Crop::Rectangle { center: [720.0 + i as f32, 540.0], width: 900.0, height: 700.0, angle: 0.3 };
             std::hint::black_box(Pipeline::default().process(&img, &PipelineConfig { crop, ..Default::default() }));
-            std::hint::black_box(MaskCache::default().get(&crop, 1440, 1080).is_some());
+            std::hint::black_box(MaskCache::default().get(&crop, 0.0, 1440, 1080).is_some());
         }
         println!("crop change: {:.2} ms", t.elapsed().as_secs_f64() * 1e3 / n as f64);
     }

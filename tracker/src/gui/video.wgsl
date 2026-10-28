@@ -9,10 +9,16 @@ struct Uniforms {
     crop_visible: u32,
     // 1 if the render target re-encodes to sRGB, so we must output linear values.
     srgb_target: u32,
+    // The threshold within the edge band (where the mask is 128).
+    edge_threshold: f32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 };
 
 @group(0) @binding(0) var frame_tex: texture_2d<f32>;
-// Same size as the frame (255 inside the crop, 0 outside), or 1x1 white when there's no crop.
+// Same size as the frame (255 inside the crop, 128 in its edge band, 0 outside), or 1x1 white when there's
+// no crop.
 @group(0) @binding(1) var mask_tex: texture_2d<f32>;
 @group(0) @binding(2) var<uniform> u: Uniforms;
 
@@ -44,14 +50,16 @@ fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let v = texel(frame_tex, in.uv);
-    let inside = texel(mask_tex, in.uv) > 0.5;
+    let mask = texel(mask_tex, in.uv);
+    let inside = mask > 0.25;
+    let threshold = select(u.threshold, u.edge_threshold, mask < 0.75);
 
     var colour = vec3<f32>(v);
     if !inside {
         if u.crop_visible == 0u {
             colour = vec3<f32>(0.0);
         }
-    } else if u.highlight != 0u && v * 255.0 > u.threshold + 0.5 {
+    } else if u.highlight != 0u && v * 255.0 > threshold + 0.5 {
         colour = vec3<f32>(1.0, 0.0, 1.0);
     }
     if u.srgb_target != 0u {

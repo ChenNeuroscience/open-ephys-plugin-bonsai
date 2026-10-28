@@ -100,8 +100,9 @@ impl VideoView {
         let callback = video_gpu::VideoCallback {
             target_format,
             view: view.clone(),
-            mask: self.mask.get_shared(&state.pipeline.crop, w, h),
+            mask: self.mask.get_shared(&state.pipeline.crop, state.pipeline.edge.width, w, h),
             threshold: state.pipeline.threshold,
+            edge_threshold: state.pipeline.edge_threshold(),
             highlight: state.detection_overlay.visible,
             crop_visible: state.crop_overlay.visible,
         };
@@ -110,6 +111,11 @@ impl VideoView {
         self.interact(ui, &response, xf, state);
 
         draw_crop(&painter, xf, &state.pipeline.crop, state.crop_overlay);
+        if state.crop_overlay.visible && state.pipeline.edge.width > 0.0 {
+            if let Some(inset) = state.pipeline.crop.inset(state.pipeline.edge.width) {
+                draw_outline(&painter, xf, &inset, Stroke::new(1.0, CROP_COLOUR), true);
+            }
+        }
         let rulers = state.calibration.overlay;
         if rulers.visible {
             for (i, ruler) in state.calibration.rulers.iter().enumerate() {
@@ -289,18 +295,9 @@ fn draw_crop(painter: &Painter, xf: Xform, crop: &Crop, overlay: Overlay) {
         return;
     }
     let stroke = Stroke::new(1.5, CROP_COLOUR);
-    let (Some(center), Some([hw, hh])) = (crop.center(), crop.half_extents()) else { return };
+    let (Some(center), Some([_, hh])) = (crop.center(), crop.half_extents()) else { return };
     let angle = crop.angle();
-    match crop {
-        Crop::Circle { .. } => {
-            painter.circle_stroke(xf.to_screen(center), hw * xf.scale, stroke);
-        }
-        _ => {
-            let corners = [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]];
-            let points = corners.iter().map(|&l| xf.to_screen(from_local(center, angle, l))).collect();
-            painter.add(Shape::closed_line(points, stroke));
-        }
-    }
+    draw_outline(painter, xf, crop, stroke, false);
     if overlay.locked {
         return;
     }
@@ -322,6 +319,29 @@ fn draw_crop(painter: &Painter, xf: Xform, crop: &Crop, overlay: Overlay) {
                 egui::StrokeKind::Middle,
             );
         }
+    }
+}
+
+/// The crop's boundary, solid or dashed.
+fn draw_outline(painter: &Painter, xf: Xform, crop: &Crop, stroke: Stroke, dashed: bool) {
+    let (Some(center), Some([hw, hh])) = (crop.center(), crop.half_extents()) else { return };
+    let mut points: Vec<Pos2> = match crop {
+        Crop::Circle { .. } => (0..=96)
+            .map(|i| {
+                let a = TAU * i as f32 / 96.0;
+                xf.to_screen([center[0] + hw * a.cos(), center[1] + hw * a.sin()])
+            })
+            .collect(),
+        _ => [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh], [-hw, -hh]]
+            .iter()
+            .map(|&l| xf.to_screen(from_local(center, crop.angle(), l)))
+            .collect(),
+    };
+    if dashed {
+        painter.extend(Shape::dashed_line(&points, stroke, 6.0, 4.0));
+    } else {
+        points.pop(); // closed_line joins the ends itself
+        painter.add(Shape::closed_line(points, stroke));
     }
 }
 

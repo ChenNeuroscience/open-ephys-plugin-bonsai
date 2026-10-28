@@ -31,7 +31,8 @@ While acquisition runs, a tracker window shows the live video with:
   and circles the two detected regions.
 - **Crop**: none, circle, square or rectangle. Drag to move, use the handles to resize, and use the stalk to
   rotate (shift snaps to 15°). The eye shows the whole frame with the crop outline, or hides it and masks
-  out everything outside the crop.
+  out everything outside the crop. **Near edge** reduces the gain within a band inside the boundary
+  (shown dashed), so LED reflections off the walls don't count.
 - **Calibration**: rulers you drag onto things of known size and give a length in cm. The mean pixels per
   metre is shown in the panel and over the video, even while the rulers are hidden.
 - Stats: frame rate, processing time, dropped frames.

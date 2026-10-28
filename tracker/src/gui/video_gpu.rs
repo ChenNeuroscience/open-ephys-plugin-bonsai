@@ -16,6 +16,8 @@ pub struct VideoCallback {
     /// `None` means no crop.
     pub mask: Option<Arc<GrayImage>>,
     pub threshold: u8,
+    /// Threshold within the crop's edge band.
+    pub edge_threshold: u8,
     pub highlight: bool,
     pub crop_visible: bool,
 }
@@ -88,7 +90,7 @@ impl Resources {
         });
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("video uniforms"),
-            size: 16,
+            size: 32,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -180,11 +182,12 @@ impl CallbackTrait for VideoCallback {
             }));
         }
 
-        let mut uniforms = [0u8; 16];
+        let mut uniforms = [0u8; 32];
         uniforms[0..4].copy_from_slice(&(self.threshold as f32).to_le_bytes());
         uniforms[4..8].copy_from_slice(&(self.highlight as u32).to_le_bytes());
         uniforms[8..12].copy_from_slice(&(self.crop_visible as u32).to_le_bytes());
         uniforms[12..16].copy_from_slice(&(self.target_format.is_srgb() as u32).to_le_bytes());
+        uniforms[16..20].copy_from_slice(&(self.edge_threshold as f32).to_le_bytes());
         queue.write_buffer(&res.uniforms, 0, &uniforms);
         Vec::new()
     }
