@@ -59,7 +59,7 @@ fn main() {
 
     tracker::gui::run(tracker.shared().clone(), tracker::gui::default_options()).expect("window");
 
-    let state = tracker.shared().state.lock().unwrap().clone();
+    let state = tracker.shared().export_state();
     match std::fs::write(STATE_FILE, serde_json::to_string_pretty(&state).unwrap()) {
         Ok(()) => println!("saved {STATE_FILE}"),
         Err(e) => eprintln!("couldn't save {STATE_FILE}: {e}"),

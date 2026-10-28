@@ -17,6 +17,9 @@ pub struct Config {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TrackerState {
+    /// Width and height of the last frames seen, so the stream metadata can be filled in before the camera
+    /// is opened. Kept up to date by the capture thread (see `Shared::export_state`), not the window.
+    pub frame_size: Option<[u32; 2]>,
     pub camera: CameraSettings,
     pub camera_locked: bool,
     pub pipeline: PipelineConfig,
@@ -163,6 +166,19 @@ impl Crop {
             Crop::Circle { .. } => x * x + y * y <= hw * hw,
             _ => x.abs() <= hw && y.abs() <= hh,
         }
+    }
+
+    /// Axis-aligned bounding box as [min_x, min_y, max_x, max_y]; `None` for no crop.
+    pub fn bounds(&self) -> Option<[f32; 4]> {
+        let (center, [hw, hh]) = (self.center()?, self.half_extents()?);
+        if let Crop::Circle { .. } = self {
+            return Some([center[0] - hw, center[1] - hh, center[0] + hw, center[1] + hh]);
+        }
+        let corners = [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]].map(|l| from_local(center, self.angle(), l));
+        let (xs, ys) = (corners.map(|c| c[0]), corners.map(|c| c[1]));
+        let min = |v: [f32; 4]| v.into_iter().fold(f32::INFINITY, f32::min);
+        let max = |v: [f32; 4]| v.into_iter().fold(f32::NEG_INFINITY, f32::max);
+        Some([min(xs), min(ys), max(xs), max(ys)])
     }
 
     pub fn set_center(&mut self, c: [f32; 2]) {

@@ -89,6 +89,9 @@ namespace CameraTracker {
         /** True if the frame rate was changed in the tracker window since the stream's sample rate was declared */
         bool isStreamRateStale();
 
+        /** Updates the stream metadata from the tracker state. Message thread only. */
+        void refreshMetadata();
+
         /** Locks the tracker window's settings while recording */
         void setRecording(bool recording);
 
@@ -114,6 +117,12 @@ private:
 
     /** Copies the tracker window's settings into the tracker_state parameter, so they're saved with the signal chain */
     void saveTrackerState();
+
+    /** The tracker state JSON: live while acquiring, otherwise as saved */
+    String currentTrackerState();
+
+    /** Stream metadata values (shared with downstream copies of the stream), updated by refreshMetadata() */
+    MetadataValuePtr metadataPixelsPerMetre, metadataWindow, metadataCrop, metadataFrameSize;
 
     TrackerHandle* tracker = nullptr;
     double declaredFrameRate = 0;

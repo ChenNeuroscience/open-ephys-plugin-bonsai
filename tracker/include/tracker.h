@@ -12,6 +12,14 @@ extern "C" {
 
 typedef struct TrackerHandle TrackerHandle;
 
+/* Summary of the tracker state for stream metadata (see tracker/src/metadata.rs). */
+typedef struct TrackerMetadata {
+    double pixels_per_metre; /* NaN if not calibrated */
+    int32_t window[4];       /* crop bounding box clipped to the frame: min_x, min_y, max_x, max_y */
+    double crop[6];          /* shape (0 none, 1 circle, 2 square, 3 rectangle), cx, cy, width, height, angle (deg) */
+    int32_t frame_size[2];   /* width, height; 0 if not known yet */
+} TrackerMetadata;
+
 typedef struct TrackerSample {
     double timestamp; /* camera clock, seconds */
     float values[6];  /* x1, y1, x2, y2, area1, area2; missing blobs are NaN with area 0 */
@@ -37,6 +45,10 @@ bool tracker_open_window(const TrackerHandle* handle);
 /* Writes the window-adjustable state (crop, rulers, threshold...) as NUL-terminated JSON, to be persisted and
    passed back as config.state next time. Returns the untruncated length; retry with a bigger buffer if >= len. */
 size_t tracker_state_json(const TrackerHandle* handle, char* buf, size_t len);
+
+/* Fills `out` from a tracker state JSON (from tracker_state_json, or saved; empty for defaults).
+   Returns false if it doesn't parse. */
+bool tracker_metadata(const char* state_json, TrackerMetadata* out);
 
 /* Stops capture, closes the window, frees the handle. NULL is ignored. */
 void tracker_stop(TrackerHandle* handle);

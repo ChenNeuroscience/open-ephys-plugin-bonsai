@@ -68,6 +68,7 @@ namespace CameraTracker {
 
 	void DataThreadPluginEditor::startRecording() {
 		thread->setRecording(true);
+		thread->refreshMetadata();
 	}
 
 	void DataThreadPluginEditor::stopRecording() {
@@ -77,6 +78,7 @@ namespace CameraTracker {
 	void DataThreadPluginEditor::timerCallback() {
 		// Also synced here in case recording started before the tracker did.
 		thread->setRecording(CoreServices::getRecordingStatus());
+		thread->refreshMetadata();
 		// A frame rate changed in the tracker window becomes the stream's sample rate once acquisition stops.
 		if (!CoreServices::getAcquisitionStatus() && thread->isStreamRateStale()) {
 			CoreServices::updateSignalChain(this);

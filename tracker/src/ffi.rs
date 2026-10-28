@@ -6,6 +6,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::time::Duration;
 
 use crate::config::Config;
+use crate::metadata::{stream_metadata, StreamMetadata};
 use crate::pipeline::TrackerSample;
 use crate::tracker::Tracker;
 
@@ -113,8 +114,28 @@ pub unsafe extern "C" fn tracker_open_window(handle: *const TrackerHandle) -> bo
 #[no_mangle]
 pub unsafe extern "C" fn tracker_state_json(handle: *const TrackerHandle, buf: *mut c_char, len: usize) -> usize {
     guard(0, || {
-        let state = (*handle).0.shared().state.lock().unwrap().clone();
+        let state = (*handle).0.shared().export_state();
         write_str(&serde_json::to_string(&state).unwrap_or_default(), buf, len)
+    })
+}
+
+/// Fills `out` with the stream metadata summary of a tracker state (as from `tracker_state_json`, or saved).
+/// Returns false if the JSON doesn't parse.
+///
+/// # Safety
+/// `state_json` must be a valid NUL-terminated string; `out` must point to a `StreamMetadata`.
+#[no_mangle]
+pub unsafe extern "C" fn tracker_metadata(state_json: *const c_char, out: *mut StreamMetadata) -> bool {
+    guard(false, || {
+        let json = CStr::from_ptr(state_json).to_string_lossy();
+        let state = if json.trim().is_empty() { Ok(Default::default()) } else { serde_json::from_str(&json) };
+        match state {
+            Ok(state) => {
+                *out = stream_metadata(&state);
+                true
+            }
+            Err(_) => false,
+        }
     })
 }
 

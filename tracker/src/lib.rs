@@ -5,6 +5,7 @@ pub mod camera;
 pub mod config;
 pub mod ffi;
 pub mod gui;
+pub mod metadata;
 pub mod pipeline;
 pub mod tracker;
 mod window;

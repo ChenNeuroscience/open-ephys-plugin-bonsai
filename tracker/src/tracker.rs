@@ -46,6 +46,8 @@ pub struct Shared {
     pub recording: AtomicBool,
     /// The tracker window is open, or has been asked to open.
     pub window_open: AtomicBool,
+    /// Size of the latest frame.
+    pub frame_size: Mutex<Option<[u32; 2]>>,
     /// What the open camera supports, refreshed after settings are applied.
     pub controls: Mutex<CameraControls>,
     /// Set by the GUI so the capture thread can wake it when a new frame arrives.
@@ -53,6 +55,16 @@ pub struct Shared {
 }
 
 impl Shared {
+    /// The state to save and to describe in stream metadata: the window's settings plus the frame size
+    /// last seen by the capture thread.
+    pub fn export_state(&self) -> TrackerState {
+        let mut state = self.state.lock().unwrap().clone();
+        if let Some(size) = *self.frame_size.lock().unwrap() {
+            state.frame_size = Some(size);
+        }
+        state
+    }
+
     pub fn set_status(&self, status: impl Into<String>) {
         *self.status.lock().unwrap() = status.into();
     }
@@ -205,6 +217,7 @@ fn capture_loop(shared: &Shared, camera_config: &CameraConfig, tx: &Sender<Track
             }
             last = Some((frame.id, frame.timestamp));
 
+            *shared.frame_size.lock().unwrap() = Some([frame.image.width(), frame.image.height()]);
             *shared.latest.lock().unwrap() = Some(Arc::new(View { frame, blobs }));
             shared.request_repaint();
         }
