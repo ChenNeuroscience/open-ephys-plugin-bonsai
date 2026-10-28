@@ -118,3 +118,8 @@ FetchContent_Declare(Corrosion GIT_REPOSITORY https://github.com/corrosion-rs/co
 FetchContent_MakeAvailable(Corrosion)
 corrosion_import_crate(MANIFEST_PATH ${CMAKE_CURRENT_SOURCE_DIR}/tracker/Cargo.toml CRATES tracker CRATE_TYPES staticlib PROFILE release)
 target_link_libraries(${PLUGIN_NAME} tracker)
+if (MSVC)
+	# System libraries the window code (winit) needs, which Corrosion doesn't pick up from Rust dependencies:
+	# input method editor, desktop window manager and visual styles.
+	target_link_libraries(${PLUGIN_NAME} imm32 dwmapi uxtheme)
+endif()
