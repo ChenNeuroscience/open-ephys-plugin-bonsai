@@ -28,7 +28,7 @@ jobs:
     permissions:
       contents: write
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0
     - name: setup
@@ -52,7 +52,7 @@ jobs:
       working-directory: tracker
       shell: bash
     - name: Add msbuild to PATH
-      uses: microsoft/setup-msbuild@v2
+      uses: microsoft/setup-msbuild@v3
     - name: configure
       run: |
         cd Build
@@ -63,7 +63,7 @@ jobs:
         msbuild Build/INSTALL.vcxproj -p:Configuration=Release -p:Platform=x64
       shell: cmd
     - name: upload artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: open-ephys-plugin-camera
         path: Build/Release/open-ephys-plugin-camera.dll
