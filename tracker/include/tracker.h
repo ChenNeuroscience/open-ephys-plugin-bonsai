@@ -16,7 +16,7 @@ typedef struct TrackerHandle TrackerHandle;
 typedef struct TrackerMetadata {
     double pixels_per_metre; /* NaN if not calibrated */
     int32_t window[4];       /* crop bounding box clipped to the frame: min_x, min_y, max_x, max_y */
-    double crop[6];          /* shape (0 none, 1 circle, 2 square, 3 rectangle), cx, cy, width, height, angle (deg) */
+    char crop[128];          /* e.g. "circle(cx,cy,r) 320 240 200": format then values; NUL-terminated, zero-padded */
     int32_t frame_size[2];   /* width, height; 0 if not known yet */
 } TrackerMetadata;
 

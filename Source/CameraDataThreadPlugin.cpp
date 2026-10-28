@@ -213,7 +213,7 @@ namespace CameraTracker {
         // Explicit template arguments pick the array overloads that Open Ephys exports (setValue<T>(const T*)).
         metadataPixelsPerMetre->setValue<double>(m.pixels_per_metre);
         metadataWindow->setValue<int32>(static_cast<const int32*>(m.window));
-        metadataCrop->setValue<double>(static_cast<const double*>(m.crop));
+        metadataCrop->setValue<char>(static_cast<const char*>(m.crop)); // whole zero-padded buffer, unlike setValue(String)
         metadataFrameSize->setValue<int32>(static_cast<const int32*>(m.frame_size));
     }
 
@@ -287,15 +287,13 @@ namespace CameraTracker {
         const Field fields[] = {
             { &metadataPixelsPerMetre, MetadataDescriptor::DOUBLE, 1, "pixels_per_metre", "Mean of the calibration rulers; NaN if not calibrated" },
             { &metadataWindow, MetadataDescriptor::INT32, 4, "window", "Crop bounding box in frame pixels, clipped to the frame: min_x, min_y, max_x, max_y" },
-            { &metadataCrop, MetadataDescriptor::DOUBLE, 6, "crop", "Crop: shape (0 none, 1 circle, 2 square, 3 rectangle), centre x, centre y, width, height, angle (degrees, clockwise)" },
+            { &metadataCrop, MetadataDescriptor::CHAR, sizeof(TrackerMetadata::crop), "crop", "Crop as format then values, e.g. \"circle(cx,cy,r) 320 240 200\"; frame pixels, degrees clockwise" },
             { &metadataFrameSize, MetadataDescriptor::INT32, 2, "frame_size", "Camera frame width and height in pixels; 0 if not known yet" },
         };
         for (const Field& f : fields) {
             MetadataDescriptor descriptor(f.type, f.length, f.name, f.description, String("camera_tracker.") + f.name);
             *f.value = new MetadataValue(descriptor);
             stream->addMetadata(new MetadataDescriptor(descriptor), f.value->get());
-            // Also on the first channel, for record engines that work from channels rather than streams.
-            continuousChannels->getFirst()->addMetadata(new MetadataDescriptor(descriptor), f.value->get());
         }
         refreshMetadata();
 

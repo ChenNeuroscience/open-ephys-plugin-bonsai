@@ -4,6 +4,9 @@
 
 use crate::config::{Crop, TrackerState};
 
+/// Size of the crop description buffer, including its terminating NUL.
+pub const CROP_LEN: usize = 128;
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StreamMetadata {
@@ -12,9 +15,9 @@ pub struct StreamMetadata {
     /// Bounding box of the crop in frame pixels, clipped to the frame: min_x, min_y, max_x, max_y.
     /// The whole frame without a crop; all zero if the frame size isn't known yet and there's no crop.
     pub window: [i32; 4],
-    /// Shape (0 none, 1 circle, 2 square, 3 rectangle), centre x, centre y, width, height, angle in degrees
-    /// (clockwise on screen). A circle's width and height are its diameter.
-    pub crop: [f64; 6],
+    /// The crop as `shape(field,...)` followed by the space-separated values, e.g.
+    /// `circle(cx,cy,r) 320 240 200`; see [`crop_description`]. NUL-terminated and zero-padded.
+    pub crop: [u8; CROP_LEN],
     /// Frame width and height in pixels; zero if not known yet.
     pub frame_size: [i32; 2],
 }
@@ -35,20 +38,31 @@ pub fn stream_metadata(state: &TrackerState) -> StreamMetadata {
         }
     };
 
-    let shape = match crop {
-        Crop::None => 0.0,
-        Crop::Circle { .. } => 1.0,
-        Crop::Square { .. } => 2.0,
-        Crop::Rectangle { .. } => 3.0,
-    };
-    let [cx, cy] = crop.center().unwrap_or([0.0, 0.0]);
-    let [hw, hh] = crop.half_extents().unwrap_or([0.0, 0.0]);
+    let mut crop_buf = [0u8; CROP_LEN];
+    let text = crop_description(&crop);
+    let n = text.len().min(CROP_LEN - 1);
+    crop_buf[..n].copy_from_slice(&text.as_bytes()[..n]);
 
     StreamMetadata {
         pixels_per_metre: state.calibration.pixels_per_meter().map_or(f64::NAN, |p| p as f64),
         window,
-        crop: [shape, cx as f64, cy as f64, 2.0 * hw as f64, 2.0 * hh as f64, crop.angle().to_degrees() as f64],
+        crop: crop_buf,
         frame_size: [fw, fh],
+    }
+}
+
+/// The crop as its format followed by space-separated values, so it can't be misread. Positions and sizes
+/// are in frame pixels; angles in degrees, clockwise on screen (y points down).
+pub fn crop_description(crop: &Crop) -> String {
+    match *crop {
+        Crop::None => "none()".into(),
+        Crop::Circle { center: [cx, cy], radius } => format!("circle(cx,cy,r) {cx} {cy} {radius}"),
+        Crop::Square { center: [cx, cy], size, angle } => {
+            format!("square(cx,cy,w,deg) {cx} {cy} {size} {}", angle.to_degrees())
+        }
+        Crop::Rectangle { center: [cx, cy], width, height, angle } => {
+            format!("rectangle(cx,cy,w,h,deg) {cx} {cy} {width} {height} {}", angle.to_degrees())
+        }
     }
 }
 
@@ -65,7 +79,8 @@ mod tests {
         let m = stream_metadata(&state);
         // A 400 px square at 45 degrees spans 400*sqrt(2) = 565.7 px each way.
         assert_eq!(m.window, [37, 0, 603, 480]);
-        assert_eq!(m.crop, [2.0, 320.0, 240.0, 400.0, 400.0, 45.0]);
+        let text = std::str::from_utf8(&m.crop).unwrap().trim_end_matches('\0');
+        assert_eq!(text, "square(cx,cy,w,deg) 320 240 400 45");
         assert_eq!(m.pixels_per_metre, 363.0);
         assert_eq!(m.frame_size, [640, 480]);
     }
@@ -74,7 +89,7 @@ mod tests {
     fn no_crop_is_the_whole_frame() {
         let m = stream_metadata(&TrackerState { frame_size: Some([1440, 1080]), ..Default::default() });
         assert_eq!(m.window, [0, 0, 1440, 1080]);
-        assert_eq!(m.crop[0], 0.0);
+        assert!(m.crop.starts_with(b"none()\0"));
         assert!(m.pixels_per_metre.is_nan());
     }
 }

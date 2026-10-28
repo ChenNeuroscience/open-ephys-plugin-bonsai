@@ -48,29 +48,47 @@ These settings are saved with the Open Ephys signal chain. If you close the wind
 
 ### Stream metadata (for record engines)
 
-The tracker settings are attached as metadata to the data stream, and also to its first channel. Record
-engines can use them in file headers:
+The tracker settings are attached as metadata to the data stream. Record engines can use them in file
+headers:
 
 | Identifier | Type | Contents |
 |---|---|---|
 | `camera_tracker.pixels_per_metre` | double | Mean of the calibration rulers; NaN if not calibrated |
 | `camera_tracker.window` | int32 ×4 | Crop bounding box in frame pixels, clipped to the frame: min_x, min_y, max_x, max_y (whole frame without a crop) |
-| `camera_tracker.crop` | double ×6 | Shape (0 none, 1 circle, 2 square, 3 rectangle), centre x, centre y, width, height, angle in degrees (clockwise) |
+| `camera_tracker.crop` | char[128] | The crop's format, then its values separated by spaces (see below) |
 | `camera_tracker.frame_size` | int32 ×2 | Frame width, height; 0 if not known yet |
+
+`crop` is one of these, in frame pixels with angles in degrees clockwise on screen:
+
+```
+none()
+circle(cx,cy,r) 320 240 200
+square(cx,cy,w,deg) 320 240 400 45
+rectangle(cx,cy,w,h,deg) 330 250 420 300 17.19
+```
 
 The fields are created when the signal chain updates. The plugin then keeps their values up to date in
 place as the window changes, so they're current when recording starts. They can't change during a
-recording, because settings are locked while recording. Reading them:
+recording, because settings are locked while recording. Reading them from the stream:
 
 ```cpp
-const ContinuousChannel* ch = getContinuousChannel(getGlobalIndex(0)); // or the DataStream
-int i = ch->findMetadata(MetadataDescriptor::DOUBLE, 1, "camera_tracker.pixels_per_metre");
+const DataStream* stream = nullptr; // the stream of the channel you identified as the camera's
+for (const DataStream* s : getDataStreams())
+    if (s->getStreamId() == getContinuousChannel(getGlobalIndex(0))->getStreamId()) stream = s;
+
+int i = stream->findMetadata(MetadataDescriptor::DOUBLE, 1, "camera_tracker.pixels_per_metre");
 double ppm = 0;
-if (i >= 0) ch->getMetadataValue(i)->getValue<double>(ppm);
+if (i >= 0) stream->getMetadataValue(i)->getValue<double>(ppm);
 int32 window[4] = {};
-int j = ch->findMetadata(MetadataDescriptor::INT32, 4, "camera_tracker.window");
-if (j >= 0) ch->getMetadataValue(j)->getValue<int32>(static_cast<int32*>(window));
+int j = stream->findMetadata(MetadataDescriptor::INT32, 4, "camera_tracker.window");
+if (j >= 0) stream->getMetadataValue(j)->getValue<int32>(static_cast<int32*>(window));
+char crop[128] = {};
+int k = stream->findMetadata(MetadataDescriptor::CHAR, 128, "camera_tracker.crop");
+if (k >= 0) stream->getMetadataValue(k)->getValue<char>(static_cast<char*>(crop));
 ```
+
+Pass the template arguments explicitly as shown. Otherwise C++ can pick overloads Open Ephys doesn't
+export.
 
 Updating in place relies on downstream copies of a stream sharing its metadata value objects. That's how
 Open Ephys v1 copies streams, but it isn't a documented guarantee.
