@@ -13,13 +13,22 @@ pub fn open(_shared: Arc<Shared>) -> Result<(), String> {
     Err("in-process window not supported on macOS".into())
 }
 
+/// Opens the window, or brings it to the front if it's already open (or about to be).
 #[cfg(not(target_os = "macos"))]
 pub fn open(shared: Arc<Shared>) -> Result<(), String> {
+    use std::sync::atomic::Ordering;
     use std::sync::OnceLock;
 
     use crossbeam_channel::Sender;
 
     static GUI_THREAD: OnceLock<Sender<Arc<Shared>>> = OnceLock::new();
+
+    if shared.window_open.swap(true, Ordering::SeqCst) {
+        if let Some(ctx) = shared.repaint.lock().unwrap().as_ref() {
+            ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Focus);
+        }
+        return Ok(());
+    }
 
     GUI_THREAD
         .get_or_init(|| {
@@ -41,11 +50,15 @@ pub fn open(shared: Arc<Shared>) -> Result<(), String> {
                         if let Err(e) = crate::gui::run(shared.clone(), options) {
                             shared.set_status(format!("window failed: {e}"));
                         }
+                        shared.window_open.store(false, Ordering::SeqCst);
                     }
                 })
                 .expect("spawn gui thread");
             tx
         })
-        .send(shared)
-        .map_err(|e| e.to_string())
+        .send(shared.clone())
+        .map_err(|e| {
+            shared.window_open.store(false, Ordering::SeqCst);
+            e.to_string()
+        })
 }

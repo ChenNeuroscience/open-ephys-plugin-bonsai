@@ -190,6 +190,11 @@ namespace CameraTracker {
         }
     }
 
+    bool DataThreadPlugin::openTrackerWindow()
+    {
+        return tracker && tracker_open_window(tracker);
+    }
+
     String DataThreadPlugin::getTrackerStatus()
     {
         if (!tracker) {

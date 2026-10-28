@@ -42,6 +42,8 @@ pub struct Shared {
     /// The frame rate this acquisition runs at (the stream's declared sample rate). Changing the frame rate
     /// in the state takes effect from the next acquisition.
     pub active_frame_rate: f64,
+    /// The tracker window is open, or has been asked to open.
+    pub window_open: AtomicBool,
     /// What the open camera supports, refreshed after settings are applied.
     pub controls: Mutex<CameraControls>,
     /// Set by the GUI so the capture thread can wake it when a new frame arrives.
@@ -81,16 +83,22 @@ impl Tracker {
             .spawn(move || capture_loop(&thread_shared, &camera_config, &tx))
             .expect("spawn capture thread");
 
+        let tracker = Tracker { shared, samples: rx, thread: Some(thread) };
         if config.show_window {
-            if let Err(e) = crate::window::open(shared.clone()) {
-                shared.set_status(format!("no window: {e}"));
+            if let Err(e) = tracker.open_window() {
+                tracker.shared.set_status(format!("no window: {e}"));
             }
         }
-        Tracker { shared, samples: rx, thread: Some(thread) }
+        tracker
     }
 
     pub fn shared(&self) -> &Arc<Shared> {
         &self.shared
+    }
+
+    /// Opens the tracker window (e.g. after the user closed it), or brings it to the front.
+    pub fn open_window(&self) -> Result<(), String> {
+        crate::window::open(self.shared.clone())
     }
 
     /// Blocks up to `timeout` for the first sample, then takes whatever else is queued.

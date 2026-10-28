@@ -77,6 +77,8 @@ namespace CameraTracker {
 
         Label statusLabel;
 
+        TextButton openWindowButton { "Open window" };
+
     };
 
 }

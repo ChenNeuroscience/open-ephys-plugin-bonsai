@@ -39,6 +39,15 @@ namespace CameraTracker {
 		sampleQualityComponent.setBounds(175, 45, SampleQualityComponent::width, SampleQualityComponent::height);
         addAndMakeVisible(&sampleQualityComponent);
 
+		openWindowButton.setBounds(10, 80, 100, 20);
+		openWindowButton.setTooltip("Reopen the tracker window if it was closed (during acquisition; not available on macOS)");
+		openWindowButton.onClick = [this] {
+			if (!this->thread->openTrackerWindow()) {
+				CoreServices::sendStatusMessage("Tracker window isn't available (macOS, or not acquiring)");
+			}
+		};
+		addAndMakeVisible(&openWindowButton);
+
 		statusLabel.setFont(FontOptions(11.0f));
 		statusLabel.setBounds(170, 98, 90, 30);
 		statusLabel.setMinimumHorizontalScale(0.5f);
@@ -62,6 +71,7 @@ namespace CameraTracker {
 		if (!CoreServices::getAcquisitionStatus() && thread->isStreamRateStale()) {
 			CoreServices::updateSignalChain(this);
 		}
+		openWindowButton.setEnabled(CoreServices::getAcquisitionStatus());
 		String status = thread->getTrackerStatus();
 		statusLabel.setText(status, dontSendNotification);
 		statusLabel.setTooltip(status);

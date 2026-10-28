@@ -81,6 +81,16 @@ pub unsafe extern "C" fn tracker_status(handle: *const TrackerHandle, buf: *mut 
     })
 }
 
+/// Opens the tracker window if the user closed it, or brings it to the front. Returns false if the window
+/// isn't supported here (macOS) or couldn't be opened.
+///
+/// # Safety
+/// `handle` must come from `tracker_start`.
+#[no_mangle]
+pub unsafe extern "C" fn tracker_open_window(handle: *const TrackerHandle) -> bool {
+    guard(false, || (*handle).0.open_window().is_ok())
+}
+
 /// Copies the current [`crate::config::TrackerState`] (crop, rulers, threshold...) as JSON into `buf`, for the
 /// host to persist and pass back as `state` in the next config. Returns its full length; call again with a
 /// bigger buffer if that's >= `len`.

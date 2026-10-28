@@ -2,6 +2,7 @@
 #ifndef TRACKER_H
 #define TRACKER_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -25,6 +26,10 @@ int64_t tracker_poll(const TrackerHandle* handle, TrackerSample* out, size_t max
 
 /* Writes a NUL-terminated status line into buf; returns its untruncated length. */
 size_t tracker_status(const TrackerHandle* handle, char* buf, size_t len);
+
+/* Opens the tracker window if it was closed, or brings it to the front. Returns false where the window isn't
+   supported (macOS). */
+bool tracker_open_window(const TrackerHandle* handle);
 
 /* Writes the window-adjustable state (crop, rulers, threshold...) as NUL-terminated JSON, to be persisted and
    passed back as config.state next time. Returns the untruncated length; retry with a bigger buffer if >= len. */
