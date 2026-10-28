@@ -103,7 +103,11 @@ fn chart_id() -> egui::Id {
 
 /// Whether the LED chart below the video is open (it starts closed).
 fn chart_open(ctx: &egui::Context) -> bool {
-    egui::collapsing_header::CollapsingState::load(ctx, chart_id()).is_some_and(|s| s.is_open())
+    ctx.data(|d| d.get_temp(chart_id())).unwrap_or(false)
+}
+
+fn set_chart_open(ctx: &egui::Context, open: bool) {
+    ctx.data_mut(|d| d.insert_temp(chart_id(), open));
 }
 
 /// A measured frame rate tidied for use as the setting: whole numbers when within 0.05% (the measurement,
@@ -303,11 +307,14 @@ impl TrackerApp {
         };
         if self.state.detection_overlay.visible {
             let history = self.shared.led_history.lock().unwrap();
-            let top_down = egui::Layout::top_down(egui::Align::Min);
+            let top_down = egui::Layout::top_down(egui::Align::Max);
             region(ui, split, rect.right(), top_down, &mut |ui| {
-                egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), chart_id(), false)
-                    .show_header(ui, |ui| ui.label("LED sizes"))
-                    .body(|ui| strip::led_chart(ui, &history));
+                if strip::toggle(ui, "LED sizes", chart_open).clicked() {
+                    set_chart_open(ui.ctx(), !chart_open);
+                }
+                if chart_open {
+                    strip::led_chart(ui, &history);
+                }
             });
         }
         if let Some((_, measured)) = self.rate_warning {
@@ -649,11 +656,7 @@ mod tests {
         let mut app = TrackerApp::new(shared, Some(target_format));
         let mut harness =
             egui_kittest::Harness::builder().with_size([1150.0, 650.0]).renderer(renderer).build_ui(|ui| app.show(ui));
-        if chart_open {
-            let mut chart = egui::collapsing_header::CollapsingState::load_with_default_open(&harness.ctx, chart_id(), false);
-            chart.set_open(true);
-            chart.store(&harness.ctx);
-        }
+        set_chart_open(&harness.ctx, chart_open);
         harness.run();
         harness.snapshot(name);
     }

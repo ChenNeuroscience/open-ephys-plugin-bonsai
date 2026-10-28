@@ -12,6 +12,32 @@ pub const AMBER: Color32 = Color32::from_rgb(230, 170, 60);
 /// Width of the LED chart at the right of the strip.
 pub const READOUT_WIDTH: f32 = 440.0;
 
+/// A collapsing toggle with its label first and the triangle at the right (for right-aligned placement);
+/// label and triangle are one click target.
+pub fn toggle(ui: &mut egui::Ui, label: &str, open: bool) -> egui::Response {
+    let colour = ui.visuals().text_color();
+    let galley = ui.painter().layout_no_wrap(label.to_owned(), egui::TextStyle::Body.resolve(ui.style()), colour);
+    let icon = 8.0;
+    let gap = ui.spacing().icon_spacing;
+    let size = egui::vec2(galley.size().x + gap + icon, galley.size().y.max(icon));
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::DisclosureTriangle, ui.is_enabled(), open, label));
+    if ui.is_rect_visible(rect) {
+        let colour = if response.hovered() { ui.visuals().strong_text_color() } else { colour };
+        ui.painter().galley(egui::pos2(rect.left(), rect.center().y - galley.size().y / 2.0), galley, colour);
+        // Pointing right when closed and down when open, like egui's own collapsing headers.
+        let c = egui::pos2(rect.right() - icon / 2.0, rect.center().y);
+        let h = icon / 2.0;
+        let points = if open {
+            vec![c + egui::vec2(-h, -h / 2.0), c + egui::vec2(h, -h / 2.0), c + egui::vec2(0.0, h * 0.75)]
+        } else {
+            vec![c + egui::vec2(-h / 2.0, -h), c + egui::vec2(h * 0.75, 0.0), c + egui::vec2(-h / 2.0, h)]
+        };
+        ui.painter().add(egui::Shape::convex_polygon(points, colour, egui::Stroke::NONE));
+    }
+    response
+}
+
 /// Big (green) and small (red) LED, the colours tracking setups have long used for the two head LEDs.
 /// (Which line is which is also clear from their sizes.)
 pub fn led_colours(_dark_mode: bool) -> [Color32; 2] {
@@ -83,6 +109,21 @@ mod tests {
         assert_eq!(big.len(), 2);
         assert!(close(big[0][0][0], 0.0) && close(big[1][0][0], 0.3) && big[0].len() == 2 && big[1].len() == 1);
         assert_eq!(seen_runs(&history, 1, 1.0).iter().map(Vec::len).collect::<Vec<_>>(), [1, 2]);
+    }
+
+    #[test]
+    fn toggle_label_and_triangle_are_one_click_target() {
+        use egui_kittest::kittest::Queryable as _;
+        let mut open = false;
+        let mut harness = egui_kittest::Harness::new_ui(|ui| {
+            if toggle(ui, "LED sizes", open).clicked() {
+                open = !open;
+            }
+        });
+        harness.get_by_label("LED sizes").click(); // the label's centre, i.e. the text
+        harness.run();
+        drop(harness);
+        assert!(open);
     }
 
     #[test]
