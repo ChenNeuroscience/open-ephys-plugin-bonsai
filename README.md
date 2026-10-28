@@ -71,7 +71,7 @@ acquisition at least that often.
 
 The plugin isn't part of the official Open Ephys set. Windows builds come from GitHub Actions:
 
-- **Branches / pull requests:** open the workflow run and download the `open-ephys-plugin-camera` artifact.
+- **Pull requests:** open the PR's workflow run and download the `open-ephys-plugin-camera` artifact.
 - **master:** each push also creates a [release](https://github.com/ChenNeuroscience/open-ephys-plugin-bonsai/releases).
 
 Copy `open-ephys-plugin-camera.dll` into `C:\Program Files\Open Ephys\plugins` and add the **Camera**

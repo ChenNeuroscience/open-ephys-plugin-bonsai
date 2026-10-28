@@ -1,9 +1,11 @@
 name: Windows
 
-# Every push builds the plugin and uploads it as a workflow artifact, so branches and PRs get a
-# downloadable .dll. Pushes to master also tag the commit and publish a release.
+# Pull requests build the plugin and upload it as a workflow artifact (a downloadable .dll).
+# Pushes to master (i.e. merges) also tag the commit and publish a release.
 on:
   push:
+    branches:
+      - master
     paths-ignore:
       - '**.md'
       - 'docs/**'
