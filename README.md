@@ -24,6 +24,9 @@ plugin so existing analysis code keeps working.
 
 While acquisition runs, a tracker window shows the live video with:
 
+- **Camera**: frame rate, exposure and gain. Exposure and gain can be left as the camera has them
+  (e.g. from SpinView), automatic, or manual. The frame rate is also the Open Ephys stream's sample rate,
+  so a change takes effect from the next acquisition.
 - **Detection**: brightness threshold and min/max region area. The eye highlights above-threshold pixels
   and circles the two detected regions.
 - **Crop**: none, circle, square or rectangle. Drag to move, use the handles to resize, and use the stalk to
@@ -47,17 +50,17 @@ These settings are saved with the Open Ephys signal chain.
 - **spinnaker**: Teledyne FLIR cameras (Blackfly S, Chameleon, Grasshopper...) via FLIR's
   [Spinnaker SDK](https://www.teledynevisionsolutions.com/products/spinnaker-sdk/), the same SDK Bonsai's
   Spinnaker package uses. Install the SDK; the plugin finds it at runtime and builds don't need it. Leave
-  **Serial** blank to use the first camera found. The plugin sets 8-bit mono output, camera-clock
-  (chunk) timestamps, and the frame rate to the **Sample Rate**. Everything else (exposure, gain, trigger
-  mode, region of interest) stays as configured in SpinView.
+  **Serial** in the plugin's editor blank to use the first camera found. The plugin sets 8-bit mono
+  output, camera-clock (chunk) timestamps, the frame rate, and exposure/gain if you change them in the
+  tracker window. Everything else (trigger mode, region of interest...) stays as configured in SpinView.
 - **fake**: frames from `tools/fake_camera.py` over TCP (**Address**).
 - **synthetic**: a built-in test pattern.
 
-The Spinnaker support is written against the SDK's C API but hasn't been run with a real camera yet.
+The Spinnaker support has only had light testing with a real camera so far.
 
 ### Timestamps and sample quality
 
-The plugin "smooths" samples onto the sample rate set in the editor, using the camera's timestamps
+The plugin "smooths" samples onto the frame rate set in the tracker window, using the camera's timestamps
 relative to the first frame. A sample more than half a period early is dropped; if a sample is more than
 half a period late, the gap is filled with NaN samples. The editor's quality widget shows the last 10
 seconds: green for samples used (a full bar means on time, shorter bars mean slightly early or late),

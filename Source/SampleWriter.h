@@ -16,7 +16,8 @@ namespace CameraTracker {
     */
     class SampleWriter {
     public:
-        SampleWriter(DataBuffer* dataBuffer, int numValues, QualityInfo& qualityInfo);
+        /** sampleRate is exact (e.g. 29.97); qualityInfo's integer rate is only for display. */
+        SampleWriter(DataBuffer* dataBuffer, int numValues, double sampleRate, QualityInfo& qualityInfo);
 
         /** Returns false if the stream has become unusable (huge gap) and acquisition should stop. */
         bool write(double timestamp, const float* values);
@@ -27,6 +28,7 @@ namespace CameraTracker {
 
         DataBuffer* dataBuffer;
         const int numChannels;
+        const double sampleRate;
         QualityInfo& qualityInfo;
 
         int64 nSamples = 0;

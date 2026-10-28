@@ -5,8 +5,8 @@ namespace CameraTracker {
     // Gaps longer than this many samples are treated as a lost source rather than filled.
     constexpr double maxGapSamples = 1000;
 
-    SampleWriter::SampleWriter(DataBuffer* dataBuffer_, int numValues, QualityInfo& qualityInfo_)
-        : dataBuffer(dataBuffer_), numChannels(numValues + 1), qualityInfo(qualityInfo_)
+    SampleWriter::SampleWriter(DataBuffer* dataBuffer_, int numValues, double sampleRate_, QualityInfo& qualityInfo_)
+        : dataBuffer(dataBuffer_), numChannels(numValues + 1), sampleRate(sampleRate_), qualityInfo(qualityInfo_)
     {
     }
 
@@ -16,7 +16,6 @@ namespace CameraTracker {
             firstTimestamp = timestamp;
         } else {
             const ScopedLock sl(qualityInfo.lock);
-            const double sampleRate = qualityInfo.sampleRate;
 
             double error = (timestamp - firstTimestamp) * sampleRate - nSamples;
 

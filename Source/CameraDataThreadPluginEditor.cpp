@@ -32,10 +32,10 @@ namespace CameraTracker {
         this->thread = thread;
         desiredWidth = 260;
 		addComboBoxParameterEditor(Parameter::PROCESSOR_SCOPE, "camera", 10, 25);
-		addTextBoxParameterEditor(Parameter::PROCESSOR_SCOPE, "serial", 10, 45);
-		addTextBoxParameterEditor(Parameter::PROCESSOR_SCOPE, "camera_address", 10, 65);
-		addToggleParameterEditor(Parameter::PROCESSOR_SCOPE, "show_window", 10, 85);
-		addTextBoxParameterEditor(Parameter::PROCESSOR_SCOPE, "sample_rate", 10, 105);
+		// Only one of these is shown, depending on the camera (see updateSettings).
+		addTextBoxParameterEditor(Parameter::PROCESSOR_SCOPE, "serial", 10, 50);
+		addTextBoxParameterEditor(Parameter::PROCESSOR_SCOPE, "camera_address", 10, 50);
+		updateSettings();
 		sampleQualityComponent.setBounds(175, 45, SampleQualityComponent::width, SampleQualityComponent::height);
         addAndMakeVisible(&sampleQualityComponent);
 
@@ -51,7 +51,17 @@ namespace CameraTracker {
 
 	}
 
+	void DataThreadPluginEditor::updateSettings() {
+		String kind = static_cast<CategoricalParameter*>(getProcessor()->getParameter("camera"))->getSelectedString();
+		getParameterEditor("serial")->setVisible(kind == "spinnaker");
+		getParameterEditor("camera_address")->setVisible(kind == "fake");
+	}
+
 	void DataThreadPluginEditor::timerCallback() {
+		// A frame rate changed in the tracker window becomes the stream's sample rate once acquisition stops.
+		if (!CoreServices::getAcquisitionStatus() && thread->isStreamRateStale()) {
+			CoreServices::updateSignalChain(this);
+		}
 		String status = thread->getTrackerStatus();
 		statusLabel.setText(status, dontSendNotification);
 		statusLabel.setTooltip(status);

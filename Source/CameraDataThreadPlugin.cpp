@@ -35,6 +35,7 @@ namespace CameraTracker {
     constexpr int NUM_CHANNELS = NUM_VALUES + 1;
     constexpr int POLL_MAX_SAMPLES = 64;
     constexpr uint32_t POLL_TIMEOUT_MS = 20;
+    constexpr double DEFAULT_FRAME_RATE = 50; // until the tracker window sets one
 
     const Array<String> CAMERA_KINDS = { "spinnaker", "fake", "synthetic" };
 
@@ -54,9 +55,7 @@ namespace CameraTracker {
         addCategoricalParameter(Parameter::PROCESSOR_SCOPE, "camera", "Camera", "Camera source: spinnaker = FLIR camera via the Spinnaker SDK; fake = tools/fake_camera.py over TCP", CAMERA_KINDS, 0, true);
         addStringParameter(Parameter::PROCESSOR_SCOPE, "serial", "Serial", "Spinnaker camera serial number (blank for the first camera found)", "", true);
         addStringParameter(Parameter::PROCESSOR_SCOPE, "camera_address", "Address", "host:port of the fake camera", "127.0.0.1:27030", true);
-        addBooleanParameter(Parameter::PROCESSOR_SCOPE, "show_window", "Window", "Open the tracker window during acquisition (not supported on macOS)", true, true);
-        addIntParameter(Parameter::PROCESSOR_SCOPE, "sample_rate","Sample Rate", "Sample Rate (Hz) to show on data stream; should match the camera frame rate.", 50, 1, 1000, true);
-        // Not shown in the editor: crop, rulers, threshold etc. as set in the tracker window, saved with the signal chain.
+        // Not shown in the editor: frame rate, crop, rulers etc. as set in the tracker window, saved with the signal chain.
         addStringParameter(Parameter::PROCESSOR_SCOPE, "tracker_state", "Tracker state", "Settings from the tracker window (JSON)", "", false);
     }
     
@@ -66,6 +65,18 @@ namespace CameraTracker {
             return; // only read when acquisition starts
         }
         CoreServices::updateSignalChain(sourceNode);
+    }
+
+    double DataThreadPlugin::getFrameRate()
+    {
+        var state = JSON::parse(getParameter("tracker_state")->getValueAsString());
+        double fps = state["camera"]["frame_rate"];
+        return fps > 0 ? fps : DEFAULT_FRAME_RATE;
+    }
+
+    bool DataThreadPlugin::isStreamRateStale()
+    {
+        return getFrameRate() != declaredFrameRate;
     }
 
     String DataThreadPlugin::buildTrackerConfig()
@@ -78,18 +89,16 @@ namespace CameraTracker {
             if (serial.isNotEmpty()) {
                 camera->setProperty("serial", serial);
             }
-            camera->setProperty("fps", (int) getParameter("sample_rate")->getValue());
         } else if (kind == "fake") {
             camera->setProperty("address", getParameter("camera_address")->getValueAsString());
         } else {
             camera->setProperty("width", 1024);
             camera->setProperty("height", 768);
-            camera->setProperty("fps", (int) getParameter("sample_rate")->getValue());
         }
 
         auto* config = new DynamicObject();
         config->setProperty("camera", var(camera));
-        config->setProperty("show_window", (bool) getParameter("show_window")->getValue());
+        config->setProperty("show_window", true);
         var state = JSON::parse(getParameter("tracker_state")->getValueAsString());
         if (state.isObject()) {
             config->setProperty("state", state);
@@ -132,8 +141,10 @@ namespace CameraTracker {
         }
         sourceBuffers.getFirst()->clear();
 
-        qualityInfo.initialise(getParameter("sample_rate")->getValue(), true);
-        sampleWriter = std::make_unique<SampleWriter>(sourceBuffers.getFirst(), NUM_VALUES, qualityInfo);
+        // The stream's sample rate was declared in updateSettings(); a newer frame rate from the window waits
+        // for the next signal chain update.
+        qualityInfo.initialise(std::max(1, roundToInt(declaredFrameRate)), true);
+        sampleWriter = std::make_unique<SampleWriter>(sourceBuffers.getFirst(), NUM_VALUES, declaredFrameRate, qualityInfo);
 
         String config = buildTrackerConfig();
         LOGC("Starting tracker with config: ", config);
@@ -206,14 +217,14 @@ namespace CameraTracker {
         sourceBuffers.clear();
         continuousChannels->clear();
 
-        int sampleRate = getParameter("sample_rate")->getValue();
+        declaredFrameRate = getFrameRate();
         // Stream, channel and event identifiers keep their original "bonsai"/"BONS" names so existing
         // recordings and downstream readers stay compatible.
         DataStream* stream = new DataStream({
            "bonsai",
            "LED positions from the camera tracker",
            "bonsai",
-           static_cast<float>(sampleRate),
+           static_cast<float>(declaredFrameRate),
         });
 
         sourceStreams->add(stream);

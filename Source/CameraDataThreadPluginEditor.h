@@ -62,6 +62,9 @@ namespace CameraTracker {
 		/** The class destructor, used to deallocate memory */
 		~DataThreadPluginEditor();
 
+		/** Shows the camera fields relevant to the selected camera */
+		void updateSettings() override;
+
 		/** Refreshes the tracker status line */
 		void timerCallback() override;
 

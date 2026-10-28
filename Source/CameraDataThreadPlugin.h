@@ -83,6 +83,12 @@ namespace CameraTracker {
         /** Allows the DataThread plugin to handle a config message while acquisition is not active */
         String handleConfigMessage (const String& msg) override;
 
+        /** The camera frame rate set in the tracker window, which is also the stream's sample rate */
+        double getFrameRate();
+
+        /** True if the frame rate was changed in the tracker window since the stream's sample rate was declared */
+        bool isStreamRateStale();
+
         /** Status line from the tracker, for the editor (empty when not acquiring). Message thread only. */
         String getTrackerStatus();
 
@@ -104,6 +110,7 @@ private:
     void saveTrackerState();
 
     TrackerHandle* tracker = nullptr;
+    double declaredFrameRate = 0;
     std::unique_ptr<SampleWriter> sampleWriter;
 
     SourceNode* sourceNode;
