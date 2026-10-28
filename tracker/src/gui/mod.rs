@@ -302,8 +302,7 @@ impl TrackerApp {
         ui.horizontal(|ui| {
             ui.label("Min area");
             ui.add(egui::DragValue::new(&mut p.min_area).range(0..=100_000).suffix(" px"));
-        });
-        ui.horizontal(|ui| {
+            ui.separator(); // keeps the checkbox visibly with "Max area"
             let mut bounded = p.max_area.is_some();
             ui.checkbox(&mut bounded, "Max area");
             p.max_area = bounded.then(|| {
@@ -637,7 +636,10 @@ mod tests {
 
     #[test]
     fn window_crop_hidden() {
-        window_snapshot("tracker_window_crop_hidden", false, |_| {}, |s| s.crop_overlay.visible = false);
+        window_snapshot("tracker_window_crop_hidden", false, |_| {}, |s| {
+            s.crop_overlay.visible = false;
+            s.pipeline.max_area = Some(400); // also shows the Max area row with its value
+        });
     }
 
     /// Regenerates docs/screenshot.png from a live frame of tools/fake_camera.py (needs python3):
