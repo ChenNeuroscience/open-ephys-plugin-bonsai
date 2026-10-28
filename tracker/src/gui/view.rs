@@ -13,7 +13,6 @@ use crate::tracker::View;
 
 use super::video_gpu;
 
-const BLOB_COLOURS: [Color32; 2] = [Color32::GREEN, Color32::RED];
 const CROP_COLOUR: Color32 = Color32::YELLOW;
 const RULER_COLOUR: Color32 = Color32::from_rgb(0, 200, 255);
 
@@ -123,7 +122,7 @@ impl VideoView {
             }
         }
         let blobs = if state.detection_overlay.visible { view.blobs.as_slice() } else { &[] };
-        for (blob, colour) in blobs.iter().zip(BLOB_COLOURS) {
+        for (blob, colour) in blobs.iter().zip(super::strip::led_colours(ui.visuals().dark_mode)) {
             let r = (blob.area as f32 / PI).sqrt() * scale + 4.0;
             // Centroids are in pixel indices; +0.5 puts them at pixel centres on screen.
             painter.circle_stroke(xf.to_screen([blob.x + 0.5, blob.y + 0.5]), r, Stroke::new(2.0, colour));

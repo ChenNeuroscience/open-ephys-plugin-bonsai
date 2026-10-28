@@ -1,114 +1,69 @@
-//! The strip below the video: LED size readout (bottom right) and the frame rate warning beside it.
+//! The strip below the video: a chart of the two LEDs' sizes (bottom right) and the frame rate warning
+//! beside it.
 
 use std::collections::VecDeque;
 
-use eframe::egui::{self, Color32, RichText, Sense, Stroke};
+use eframe::egui::{self, Color32};
+use egui_plot::{uniform_grid_spacer, Corner, Legend, Line, Plot, PlotBounds};
 
 use crate::tracker::LED_HISTORY;
 
 pub const AMBER: Color32 = Color32::from_rgb(230, 170, 60);
-const LED_COLOURS: [Color32; 2] = [Color32::GREEN, Color32::RED];
-/// Width of the LED readout at the right of the strip.
+/// Width of the LED chart at the right of the strip.
 pub const READOUT_WIDTH: f32 = 440.0;
-/// Below this big/small area ratio the two LEDs are getting hard to tell apart.
-const LOW_RATIO: f32 = 1.5;
 
-/// Summary of the two LEDs' areas over the recent history.
-#[derive(Debug, PartialEq)]
-pub struct LedSummary {
-    /// Latest areas (big, small); 0 if not seen.
-    pub current: [u32; 2],
-    /// Median area of each while seen; 0 if never seen.
-    pub median: [u32; 2],
-    /// Big/small area ratio over frames where both were seen: (median, lowest).
-    pub ratio: Option<(f32, f32)>,
-    /// Fraction of frames in which both were seen.
-    pub both_seen: f32,
-}
-
-pub fn led_summary(history: &VecDeque<(f64, [u32; 2])>) -> Option<LedSummary> {
-    let &(_, current) = history.back()?;
-    let median = |mut v: Vec<f32>| -> Option<f32> {
-        if v.is_empty() {
-            return None;
-        }
-        v.sort_by(f32::total_cmp);
-        Some(v[v.len() / 2])
-    };
-    let areas = |i: usize| history.iter().map(|&(_, a)| a[i]).filter(|&a| a > 0).map(|a| a as f32).collect();
-    let ratios: Vec<f32> =
-        history.iter().filter(|(_, a)| a[0] > 0 && a[1] > 0).map(|&(_, a)| a[0] as f32 / a[1] as f32).collect();
-    Some(LedSummary {
-        current,
-        median: [0, 1].map(|i| median(areas(i)).unwrap_or(0.0) as u32),
-        both_seen: ratios.len() as f32 / history.len() as f32,
-        ratio: ratios.iter().copied().reduce(f32::min).map(|lowest| (median(ratios).unwrap(), lowest)),
-    })
-}
-
-/// Coloured dot, painted (egui's fonts have no bullet glyph).
-fn dot(ui: &mut egui::Ui, colour: Color32) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), Sense::hover());
-    ui.painter().circle_filled(rect.center(), 4.0, colour);
-}
-
-pub fn led_readout(ui: &mut egui::Ui, history: &VecDeque<(f64, [u32; 2])>) {
-    let Some(summary) = led_summary(history) else {
-        ui.weak("No LEDs yet");
-        return;
-    };
-    ui.horizontal(|ui| {
-        sparkline(ui, history);
-        ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = 2.0;
-            for (i, name) in ["Big", "Small"].into_iter().enumerate() {
-                ui.horizontal(|ui| {
-                    dot(ui, LED_COLOURS[i]);
-                    ui.label(format!("{name} {} px", summary.current[i]));
-                    ui.weak(format!("median {}", summary.median[i]));
-                });
-            }
-            ui.horizontal(|ui| {
-                let ratio = match summary.ratio {
-                    Some((median, lowest)) => {
-                        let text = RichText::new(format!("Ratio {median:.1}×, lowest {lowest:.1}×"));
-                        if lowest < LOW_RATIO { text.color(AMBER) } else { text }
-                    }
-                    None => RichText::new("Ratio –"),
-                };
-                ui.label(ratio).on_hover_text(format!(
-                    "Big/small area ratio over the last {LED_HISTORY:.0} s. Near 1 the two LEDs are hard to tell \
-                     apart: zoom the lens in (or defocus slightly) so each covers more pixels."
-                ));
-                ui.weak(format!("both seen {:.0}%", 100.0 * summary.both_seen));
-            });
-        });
-    });
-}
-
-/// Both LEDs' areas over the last `LED_HISTORY` seconds; gaps where an LED wasn't seen.
-fn sparkline(ui: &mut egui::Ui, history: &VecDeque<(f64, [u32; 2])>) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(180.0, 52.0), Sense::hover());
-    let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 2.0, ui.visuals().extreme_bg_color);
-    let Some(&(end, _)) = history.back() else { return };
-    let top = history.iter().map(|&(_, a)| a[0].max(a[1])).max().unwrap_or(1).max(1) as f32;
-    let to_screen = |t: f64, area: u32| {
-        let x = rect.left() + rect.width() * (1.0 - ((end - t) / LED_HISTORY) as f32);
-        let y = rect.bottom() - 2.0 - (rect.height() - 4.0) * area as f32 / top;
-        egui::pos2(x, y)
-    };
-    for i in 0..2 {
-        let mut line = Vec::new();
-        for &(t, areas) in history {
-            if areas[i] > 0 {
-                line.push(to_screen(t, areas[i]));
-            } else if !line.is_empty() {
-                painter.add(egui::Shape::line(std::mem::take(&mut line), Stroke::new(1.2, LED_COLOURS[i])));
-            }
-        }
-        painter.add(egui::Shape::line(line, Stroke::new(1.2, LED_COLOURS[i])));
+/// Big and small LED colours, for dark and light themes: the first two slots of a categorical palette
+/// validated for colour-vision deficiency against egui's panel colours (unlike green/red).
+pub fn led_colours(dark_mode: bool) -> [Color32; 2] {
+    if dark_mode {
+        [Color32::from_rgb(0x39, 0x87, 0xe5), Color32::from_rgb(0xd9, 0x59, 0x26)]
+    } else {
+        [Color32::from_rgb(0x2a, 0x78, 0xd6), Color32::from_rgb(0xeb, 0x68, 0x34)]
     }
+}
+
+/// Areas of the big and small LED over the last `LED_HISTORY` seconds, with time relative to the latest
+/// frame. Frames where an LED wasn't seen leave a gap in its line.
+pub fn led_chart(ui: &mut egui::Ui, history: &VecDeque<(f64, [u32; 2])>) {
+    let colours = led_colours(ui.visuals().dark_mode);
+    let end = history.back().map_or(0.0, |&(t, _)| t);
+    // Headroom above the data keeps the legend (top left) clear of the lines.
+    let top = history.iter().map(|&(_, a)| a[0].max(a[1])).max().unwrap_or(0).max(10) as f64 * 1.6;
+
+    Plot::new("led_sizes")
+        .width(READOUT_WIDTH)
+        .height(ui.available_height())
+        .legend(Legend::default().position(Corner::LeftTop))
+        .x_axis_label("time (s)")
+        .x_grid_spacer(uniform_grid_spacer(|_| [1.0, 2.0, 10.0]))
+        .y_axis_label("area (px)")
+        .allow_zoom(false)
+        .allow_drag(false)
+        .allow_scroll(false)
+        .allow_boxed_zoom(false)
+        .allow_double_click_reset(false)
+        .show(ui, |plot| {
+            plot.set_plot_bounds(PlotBounds::from_min_max([-LED_HISTORY - 0.2, 0.0], [0.4, top])); // room for the end ticks
+            for (i, name) in ["Big", "Small"].into_iter().enumerate() {
+                for run in seen_runs(history, i, end) {
+                    plot.line(Line::new(name, run).color(colours[i]).width(2.0));
+                }
+            }
+        });
+}
+
+/// Runs of consecutive frames in which LED `i` was seen, as (seconds before `end`, area) points.
+fn seen_runs(history: &VecDeque<(f64, [u32; 2])>, i: usize, end: f64) -> Vec<Vec<[f64; 2]>> {
+    let mut runs = vec![Vec::new()];
+    for &(t, areas) in history {
+        if areas[i] > 0 {
+            runs.last_mut().unwrap().push([t - end, areas[i] as f64]);
+        } else if !runs.last().unwrap().is_empty() {
+            runs.push(Vec::new());
+        }
+    }
+    runs.retain(|r| !r.is_empty());
+    runs
 }
 
 #[cfg(test)]
@@ -116,14 +71,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn summary_ignores_unseen_frames() {
+    fn runs_break_where_the_led_was_not_seen() {
         let history: VecDeque<_> =
-            [(0.0, [30, 10]), (0.1, [32, 0]), (0.2, [28, 14]), (0.3, [0, 0]), (0.4, [31, 12])].into_iter().collect();
-        let s = led_summary(&history).unwrap();
-        assert_eq!(s.current, [31, 12]);
-        assert_eq!(s.median, [31, 12]);
-        let (median, lowest) = s.ratio.unwrap();
-        assert!((median - 2.583).abs() < 0.01 && (lowest - 2.0).abs() < 1e-6);
-        assert_eq!(s.both_seen, 0.6);
+            [(1.0, [30, 10]), (1.1, [32, 0]), (1.2, [0, 14]), (1.3, [31, 12])].into_iter().collect();
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
+        let big = seen_runs(&history, 0, 1.3);
+        assert_eq!(big.len(), 2);
+        assert!(close(big[0][0][0], -0.3) && big[0].len() == 2 && big[1].len() == 1);
+        assert_eq!(seen_runs(&history, 1, 1.3).iter().map(Vec::len).collect::<Vec<_>>(), [1, 2]);
     }
 }

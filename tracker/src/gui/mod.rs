@@ -91,7 +91,7 @@ fn held_rate_warning(current: Option<(f64, f64)>, now: f64, measured: f64, activ
 }
 
 /// Height of the strip below the video (LED readout, warnings); fixed so the video doesn't jump.
-const STRIP_HEIGHT: f32 = 92.0;
+const STRIP_HEIGHT: f32 = 150.0;
 
 /// A measured frame rate tidied for use as the setting: whole numbers when within 0.05% (the measurement,
 /// from camera timestamps over several seconds, is far more precise than that), otherwise 2 decimals, so
@@ -223,7 +223,7 @@ impl TrackerApp {
         }
     }
 
-    /// Below the video: the LED size readout at the right (while detection is visible) and, beside it, a
+    /// Below the video: the LED size chart at the right (while detection is visible) and, beside it, a
     /// warning when frames arrive at a different rate from the stream's declared one (which is what actually
     /// matters). The warning uses the rate over the last few seconds and, once shown, stays for at least
     /// `RATE_WARNING_HOLD` seconds so it doesn't flicker.
@@ -247,7 +247,7 @@ impl TrackerApp {
         if self.state.detection_overlay.visible {
             let history = self.shared.led_history.lock().unwrap();
             let ltr = egui::Layout::left_to_right(egui::Align::Min);
-            region(ui, split, rect.right(), ltr, &mut |ui| strip::led_readout(ui, &history));
+            region(ui, split, rect.right(), ltr, &mut |ui| strip::led_chart(ui, &history));
         }
         if let Some((_, measured)) = self.rate_warning {
             let rtl = egui::Layout::right_to_left(egui::Align::Center);
