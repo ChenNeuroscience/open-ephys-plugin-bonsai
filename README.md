@@ -44,8 +44,16 @@ These settings are saved with the Open Ephys signal chain.
 
 ### Cameras
 
-For now there's a fake camera (`tools/fake_camera.py`, streaming over TCP) and a built-in synthetic one.
-Support for real cameras is next; see [PLAN.md](PLAN.md).
+- **spinnaker**: Teledyne FLIR cameras (Blackfly S, Chameleon, Grasshopper...) via FLIR's
+  [Spinnaker SDK](https://www.teledynevisionsolutions.com/products/spinnaker-sdk/), the same SDK Bonsai's
+  Spinnaker package uses. Install the SDK; the plugin finds it at runtime and builds don't need it. Leave
+  **Serial** blank to use the first camera found. The plugin sets 8-bit mono output, camera-clock
+  (chunk) timestamps, and the frame rate to the **Sample Rate**. Everything else (exposure, gain, trigger
+  mode, region of interest) stays as configured in SpinView.
+- **fake**: frames from `tools/fake_camera.py` over TCP (**Address**).
+- **synthetic**: a built-in test pattern.
+
+The Spinnaker support is written against the SDK's C API but hasn't been run with a real camera yet.
 
 ### Timestamps and sample quality
 
@@ -89,6 +97,7 @@ python3 tools/fake_camera.py                      # fake camera on 127.0.0.1:270
 cd tracker
 cargo run --release --bin tracker-dev             # the tracker window, printing samples to stdout
 cargo run --release --bin tracker-dev -- synthetic   # or without the fake camera
+cargo run --release --bin tracker-dev -- spinnaker   # or a FLIR camera (needs the Spinnaker SDK)
 cargo test --release -- --include-ignored         # tests, incl. end-to-end against fake_camera.py
 ```
 

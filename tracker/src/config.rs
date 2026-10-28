@@ -53,6 +53,18 @@ pub enum CameraConfig {
     Synthetic { width: u32, height: u32, fps: f64 },
     /// Raw frames streamed over TCP by `tools/fake_camera.py`.
     Fake { address: String },
+    /// A Teledyne FLIR camera via the Spinnaker SDK.
+    Spinnaker {
+        /// `None` (or blank) for the first camera found.
+        #[serde(default)]
+        serial: Option<String>,
+        /// Frame rate to set on the camera, where it allows that.
+        #[serde(default)]
+        fps: Option<f64>,
+        /// Path to the Spinnaker C library, if it isn't found automatically.
+        #[serde(default)]
+        library: Option<String>,
+    },
 }
 
 impl Default for CameraConfig {

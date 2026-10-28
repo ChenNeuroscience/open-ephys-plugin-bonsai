@@ -36,7 +36,7 @@ namespace CameraTracker {
     constexpr int POLL_MAX_SAMPLES = 64;
     constexpr uint32_t POLL_TIMEOUT_MS = 20;
 
-    const Array<String> CAMERA_KINDS = { "fake", "synthetic" };
+    const Array<String> CAMERA_KINDS = { "spinnaker", "fake", "synthetic" };
 
 
     DataThreadPlugin::DataThreadPlugin(SourceNode* sn) : DataThread(sn), sourceNode(sn)
@@ -51,7 +51,8 @@ namespace CameraTracker {
 
     void DataThreadPlugin::registerParameters()
     {
-        addCategoricalParameter(Parameter::PROCESSOR_SCOPE, "camera", "Camera", "Camera source (fake = tools/fake_camera.py over TCP)", CAMERA_KINDS, 0, true);
+        addCategoricalParameter(Parameter::PROCESSOR_SCOPE, "camera", "Camera", "Camera source: spinnaker = FLIR camera via the Spinnaker SDK; fake = tools/fake_camera.py over TCP", CAMERA_KINDS, 0, true);
+        addStringParameter(Parameter::PROCESSOR_SCOPE, "serial", "Serial", "Spinnaker camera serial number (blank for the first camera found)", "", true);
         addStringParameter(Parameter::PROCESSOR_SCOPE, "camera_address", "Address", "host:port of the fake camera", "127.0.0.1:27030", true);
         addBooleanParameter(Parameter::PROCESSOR_SCOPE, "show_window", "Window", "Open the tracker window during acquisition (not supported on macOS)", true, true);
         addIntParameter(Parameter::PROCESSOR_SCOPE, "sample_rate","Sample Rate", "Sample Rate (Hz) to show on data stream; should match the camera frame rate.", 50, 1, 1000, true);
@@ -72,7 +73,13 @@ namespace CameraTracker {
         auto* camera = new DynamicObject();
         String kind = static_cast<CategoricalParameter*>(getParameter("camera"))->getSelectedString();
         camera->setProperty("kind", kind);
-        if (kind == "fake") {
+        if (kind == "spinnaker") {
+            String serial = getParameter("serial")->getValueAsString().trim();
+            if (serial.isNotEmpty()) {
+                camera->setProperty("serial", serial);
+            }
+            camera->setProperty("fps", (int) getParameter("sample_rate")->getValue());
+        } else if (kind == "fake") {
             camera->setProperty("address", getParameter("camera_address")->getValueAsString());
         } else {
             camera->setProperty("width", 1024);

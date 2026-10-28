@@ -3,6 +3,7 @@
 //!
 //!     cargo run --release --bin tracker-dev                 # fake camera (run tools/fake_camera.py)
 //!     cargo run --release --bin tracker-dev -- synthetic    # built-in test scene
+//!     cargo run --release --bin tracker-dev -- spinnaker    # first FLIR camera found (needs the Spinnaker SDK)
 //!     cargo run --release --bin tracker-dev -- '<json>'     # full Config as JSON
 //!
 //! The window's state (crop, rulers, threshold...) is kept in `tracker-dev.state.json` in the working
@@ -22,6 +23,10 @@ fn main() {
         None => Config::default(),
         Some("synthetic") => Config {
             camera: CameraConfig::Synthetic { width: 1024, height: 768, fps: 50.0 },
+            ..Default::default()
+        },
+        Some("spinnaker") => Config {
+            camera: CameraConfig::Spinnaker { serial: None, fps: None, library: None },
             ..Default::default()
         },
         Some(json) => serde_json::from_str(json).expect("config JSON"),

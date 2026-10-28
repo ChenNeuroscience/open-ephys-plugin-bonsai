@@ -135,7 +135,8 @@ fn capture_loop(shared: &Shared, camera_config: &CameraConfig, tx: &Sender<Track
                 continue;
             }
         };
-        shared.set_status("running");
+        let description = camera.description();
+        shared.set_status(if description.is_empty() { "running".to_string() } else { format!("running: {description}") });
         let mut last: Option<(u64, f64)> = None;
 
         while !stopping() {

@@ -80,15 +80,12 @@ below keeps that option cheap.
    `width*height` gray8 bytes, all little-endian.
 3. *(phase 2)* `webcam`: `nokhwa` (UVC/AVFoundation/MSMF). Covers Bonsai's
    `CameraCapture` and lets you test with the Mac's built-in camera.
-4. *(phase 2)* the real rig camera. The Bonsai workflow uses `SpinnakerCapture`, so a FLIR
-   camera. Options are:
-   * `cameleon`: pure-Rust GenICam (USB3 Vision / GigE Vision). Vendor-neutral, no SDK,
-     and also covers Basler etc.
-   * FFI to the Spinnaker C API: the vendor-supported path, already installed on the rig,
-     and gives chunk timestamps and trigger config.
-   We need the camera model to decide; Spinnaker FFI is probably safest. Hardware TTL
-   triggering stays out of scope, but the trait will carry the camera's own timestamp
-   (`ChunkData.Timestamp` today).
+4. `spinnaker`: the rig camera. The Bonsai workflow used `SpinnakerCapture`, i.e. a Teledyne FLIR camera.
+   We use the Spinnaker SDK's C API, loaded at runtime, rather than pure-Rust GenICam (`cameleon`). On
+   Windows the FLIR driver owns USB3 Vision devices, so `cameleon` (libusb) would need a driver swap that
+   breaks SpinView and Bonsai. Hardware TTL triggering stays out of scope; the camera's own trigger
+   settings are left alone, and frames carry the camera-clock chunk timestamp (as `ChunkData.Timestamp`
+   did in Bonsai).
 
 ## Pipeline (mirrors the Bonsai workflow)
 
@@ -129,8 +126,14 @@ plugin's editor.
 - [ ] Windows CI: install Rust in the workflow
 
 **Phase 2: real cameras + config persistence**
-- webcam backend (nokhwa); rig camera backend (Spinnaker or cameleon)
-- wgpu shader-based video view (zoom/pan, threshold preview as a shader LUT)
+- [x] Spinnaker backend: the SDK's C library is loaded at runtime with `libloading` (no SDK needed to
+      build or in CI); signatures checked against Spinnaker.jl's generated bindings. Sets Mono8, chunk
+      timestamps and frame rate; leaves exposure/gain/trigger as configured in SpinView.
+      **Untested with real hardware**: first run on the rig with `tracker-dev -- spinnaker`.
+- [x] Video drawn on the GPU (8-bit texture upload + WGSL shader for mask/highlight) instead of a
+      per-frame CPU colour conversion
+- camera settings (exposure, gain) in the tracker window
+- webcam backend (nokhwa), if wanted
 - polygon crop (for arenas that aren't circles or rectangles), if needed
 
 **Phase 3: performance and timing**

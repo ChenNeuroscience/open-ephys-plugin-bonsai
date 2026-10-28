@@ -1,6 +1,7 @@
 //! Camera backends. Each produces 8-bit grayscale frames tagged with the camera's own timestamp.
 
 mod fake;
+mod spinnaker;
 mod synthetic;
 
 use std::io;
@@ -10,6 +11,7 @@ use image::GrayImage;
 use crate::config::CameraConfig;
 
 pub use fake::FakeCamera;
+pub use spinnaker::SpinnakerCamera;
 pub use synthetic::SyntheticCamera;
 
 pub struct Frame {
@@ -24,6 +26,11 @@ pub trait Camera: Send {
     /// Waits briefly for the next frame. `Ok(None)` means nothing arrived yet; the caller
     /// should check whether it has been asked to stop and then call again.
     fn next_frame(&mut self) -> io::Result<Option<Frame>>;
+
+    /// Shown in the status line, e.g. the camera model and serial number.
+    fn description(&self) -> String {
+        String::new()
+    }
 }
 
 pub fn open(config: &CameraConfig) -> io::Result<Box<dyn Camera>> {
@@ -32,5 +39,10 @@ pub fn open(config: &CameraConfig) -> io::Result<Box<dyn Camera>> {
             Box::new(SyntheticCamera::new(*width, *height, *fps))
         }
         CameraConfig::Fake { address } => Box::new(FakeCamera::connect(address)?),
+        CameraConfig::Spinnaker { serial, fps, library } => Box::new(SpinnakerCamera::open(
+            serial.as_deref().filter(|s| !s.trim().is_empty()),
+            *fps,
+            library.as_deref(),
+        )?),
     })
 }
