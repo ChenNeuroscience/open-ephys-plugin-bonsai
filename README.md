@@ -28,8 +28,6 @@ While acquisition runs, a tracker window shows the live video with:
   (e.g. from SpinView), automatic, or manual. The frame rate is also the Open Ephys stream's sample rate,
   so a change takes effect from the next acquisition. If the camera won't take a frame rate (some models,
   or when it's configured elsewhere), **Detect** sets it to the rate the camera is actually delivering.
-- Below the video: the two LEDs' sizes over the last 10 s, including how distinct they are (big/small
-  area ratio), plus a warning if frames arrive at a different rate from the stream's.
 - **Crop**: none, circle, square or rectangle. Drag to move, use the handles to resize, and use the stalk to
   rotate (shift snaps to 15°). The eye shows the whole frame with the crop outline, or hides it and masks
   out everything outside the crop.
@@ -38,6 +36,8 @@ While acquisition runs, a tracker window shows the live video with:
   count. The eye highlights above-threshold pixels and circles the two detected regions.
 - **Calibration**: rulers you drag onto things of known size and give a length in cm. The mean pixels per
   metre is shown in the panel and over the video, even while the rulers are hidden.
+- Below the video: the two LEDs' sizes over the last 10 s, including how distinct they are (big/small
+  area ratio), plus a warning if frames arrive at a different rate from the stream's.
 - Stats: frame rate, processing time, dropped frames.
 
 The eye and padlock sit in each section's header. The padlock locks that section's controls and stops its
