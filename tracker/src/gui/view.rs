@@ -1,20 +1,21 @@
-//! The video panel: frame texture, crop/ruler/blob overlays, and dragging of crop and ruler handles.
+//! The video panel: the frame (drawn on the GPU, see `video_gpu`), crop/ruler/blob overlays, and dragging of
+//! crop and ruler handles.
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
+use std::sync::Arc;
 
-use eframe::egui::{
-    self, Align2, Color32, ColorImage, CursorIcon, FontId, Painter, Pos2, Rect, Response, Sense, Shape, Stroke,
-    TextureHandle, TextureOptions,
-};
+use eframe::egui::{self, Align2, Color32, CursorIcon, FontId, Painter, Pos2, Rect, Response, Sense, Shape, Stroke};
+use eframe::wgpu;
 
 use crate::config::{from_local, to_local, Crop, Overlay, TrackerState};
 use crate::pipeline::MaskCache;
 use crate::tracker::View;
 
+use super::video_gpu;
+
 const BLOB_COLOURS: [Color32; 2] = [Color32::GREEN, Color32::RED];
 const CROP_COLOUR: Color32 = Color32::YELLOW;
 const RULER_COLOUR: Color32 = Color32::from_rgb(0, 200, 255);
-const HIGHLIGHT_COLOUR: Color32 = Color32::from_rgb(255, 0, 255);
 
 // Screen-space sizes, in points.
 const HANDLE_RADIUS: f32 = 5.0;
@@ -43,15 +44,6 @@ struct Drag {
     last: [f32; 2],
 }
 
-#[derive(Clone, Copy, PartialEq)]
-struct TextureKey {
-    frame: u64,
-    highlight: bool,
-    threshold: u8,
-    crop: Crop,
-    crop_visible: bool,
-}
-
 /// Maps between image pixels and screen points for the displayed frame.
 #[derive(Clone, Copy)]
 struct Xform {
@@ -70,10 +62,9 @@ impl Xform {
     }
 }
 
-#[derive(Default)]
 pub struct VideoView {
-    texture: Option<TextureHandle>,
-    texture_key: Option<TextureKey>,
+    /// Format of the window's render target; `None` if eframe isn't rendering with wgpu.
+    target_format: Option<wgpu::TextureFormat>,
     mask: MaskCache,
     drag: Option<Drag>,
     /// Size of the most recent frame, once one has arrived.
@@ -81,22 +72,40 @@ pub struct VideoView {
 }
 
 impl VideoView {
-    pub fn show(&mut self, ui: &mut egui::Ui, state: &mut TrackerState, view: Option<&View>) {
+    pub fn new(target_format: Option<wgpu::TextureFormat>) -> Self {
+        VideoView { target_format, mask: MaskCache::default(), drag: None, image_size: None }
+    }
+
+    pub fn show(&mut self, ui: &mut egui::Ui, state: &mut TrackerState, view: Option<&Arc<View>>) {
         let Some(view) = view else {
             ui.centered_and_justified(|ui| ui.label("No frames yet"));
             return;
         };
-        self.update_texture(ui.ctx(), view, state);
-        let Some(texture) = &self.texture else { return };
+        let Some(target_format) = self.target_format else {
+            ui.centered_and_justified(|ui| ui.label("Video needs the wgpu renderer"));
+            return;
+        };
 
         // Fit the frame in the available space, preserving aspect ratio.
-        let img_size = texture.size_vec2();
+        let (w, h) = view.frame.image.dimensions();
+        let img_size = egui::vec2(w as f32, h as f32);
         self.image_size = Some([img_size.x, img_size.y]);
         let avail = ui.available_size();
         let scale = (avail.x / img_size.x).min(avail.y / img_size.y);
         let (response, painter) = ui.allocate_painter(img_size * scale, Sense::click_and_drag());
         let xf = Xform { origin: response.rect.min, scale };
-        painter.image(texture.id(), response.rect, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
+
+        // Inside the crop: the frame, with above-threshold pixels highlighted (if detection is visible).
+        // Outside: the plain frame while the crop is visible, masked to black when it's hidden.
+        let callback = video_gpu::VideoCallback {
+            target_format,
+            view: view.clone(),
+            mask: self.mask.get_shared(&state.pipeline.crop, w, h),
+            threshold: state.pipeline.threshold,
+            highlight: state.detection_overlay.visible,
+            crop_visible: state.crop_overlay.visible,
+        };
+        video_gpu::paint(&painter, response.rect, callback);
 
         self.interact(ui, &response, xf, state);
 
@@ -116,47 +125,6 @@ impl VideoView {
         if let Some(ppm) = state.calibration.pixels_per_meter() {
             label(&painter, response.rect.left_top() + egui::vec2(8.0, 8.0), Align2::LEFT_TOP, format!("{ppm:.1} px/m"), Color32::WHITE);
         }
-    }
-
-    /// Inside the crop: the frame, with above-threshold pixels highlighted. Outside: the plain frame while the
-    /// crop overlay is visible, masked to black when it's hidden.
-    fn update_texture(&mut self, ctx: &egui::Context, view: &View, state: &TrackerState) {
-        let pipeline = &state.pipeline;
-        let highlight = state.detection_overlay.visible;
-        let crop_visible = state.crop_overlay.visible;
-        let key = TextureKey {
-            frame: view.frame.id,
-            highlight,
-            threshold: pipeline.threshold,
-            crop: pipeline.crop,
-            crop_visible,
-        };
-        if self.texture_key == Some(key) && self.texture.is_some() {
-            return;
-        }
-        let img = &view.frame.image;
-        let mask = self.mask.get(&pipeline.crop, img.width(), img.height()).map(|m| m.as_raw());
-        let threshold = pipeline.threshold;
-        let pixels = img
-            .as_raw()
-            .iter()
-            .enumerate()
-            .map(|(i, &v)| {
-                if mask.is_some_and(|m| m[i] == 0) {
-                    if crop_visible { Color32::from_gray(v) } else { Color32::BLACK }
-                } else if highlight && v > threshold {
-                    HIGHLIGHT_COLOUR
-                } else {
-                    Color32::from_gray(v)
-                }
-            })
-            .collect();
-        let image = ColorImage::new([img.width() as usize, img.height() as usize], pixels);
-        match &mut self.texture {
-            Some(tex) => tex.set(image, TextureOptions::NEAREST),
-            None => self.texture = Some(ctx.load_texture("frame", image, TextureOptions::NEAREST)),
-        }
-        self.texture_key = Some(key);
     }
 
     fn interact(&mut self, ui: &egui::Ui, response: &Response, xf: Xform, state: &mut TrackerState) {

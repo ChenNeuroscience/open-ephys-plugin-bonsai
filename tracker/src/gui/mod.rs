@@ -1,6 +1,7 @@
 //! Live view window: the latest frame with overlays (see `view`), plus a side panel of controls.
 
 mod icons;
+mod video_gpu;
 mod view;
 
 use std::sync::atomic::Ordering;
@@ -20,7 +21,8 @@ pub fn run(shared: Arc<Shared>, options: eframe::NativeOptions) -> eframe::Resul
         options,
         Box::new(move |cc| {
             *shared.repaint.lock().unwrap() = Some(cc.egui_ctx.clone());
-            Ok(Box::new(TrackerApp::new(shared)))
+            let target_format = cc.wgpu_render_state.as_ref().map(|rs| rs.target_format);
+            Ok(Box::new(TrackerApp::new(shared, target_format)))
         }),
     )
 }
@@ -76,9 +78,9 @@ struct TrackerApp {
 }
 
 impl TrackerApp {
-    fn new(shared: Arc<Shared>) -> Self {
+    fn new(shared: Arc<Shared>, target_format: Option<eframe::wgpu::TextureFormat>) -> Self {
         let state = shared.state.lock().unwrap().clone();
-        TrackerApp { shared, state, video: Default::default() }
+        TrackerApp { shared, state, video: view::VideoView::new(target_format) }
     }
 
     fn image_size(&self) -> [f32; 2] {
@@ -310,7 +312,7 @@ impl TrackerApp {
             egui::ScrollArea::vertical().show(ui, |ui| self.controls(ui));
         });
         let latest = self.shared.latest.lock().unwrap().clone();
-        egui::CentralPanel::default().show(ui, |ui| self.video.show(ui, &mut self.state, latest.as_deref()));
+        egui::CentralPanel::default().show(ui, |ui| self.video.show(ui, &mut self.state, latest.as_ref()));
 
         if self.state != before {
             *self.shared.state.lock().unwrap() = self.state.clone();
@@ -330,6 +332,13 @@ mod tests {
     use crate::camera::{Camera, SyntheticCamera};
     use crate::tracker::View;
 
+    /// A wgpu renderer for the harness, plus its target format so the app's video callback can draw into it.
+    fn test_renderer() -> (egui_kittest::wgpu::WgpuTestRenderer, eframe::wgpu::TextureFormat) {
+        let state = egui_kittest::wgpu::create_render_state(egui_kittest::wgpu::default_wgpu_setup(), Default::default());
+        let format = state.target_format;
+        (egui_kittest::wgpu::WgpuTestRenderer::from_render_state(state), format)
+    }
+
     /// Renders the whole window. Run with UPDATE_SNAPSHOTS=1 to accept changes; see tests/snapshots/.
     fn window_snapshot(name: &str, configure: impl FnOnce(&mut TrackerState)) {
         let frame = SyntheticCamera::new(640, 480, 1000.0).next_frame().unwrap().unwrap();
@@ -344,8 +353,10 @@ mod tests {
         let shared = Arc::new(Shared { state: state.into(), ..Default::default() });
         *shared.latest.lock().unwrap() = Some(Arc::new(View { frame, blobs }));
 
-        let mut app = TrackerApp::new(shared);
-        let mut harness = egui_kittest::Harness::builder().with_size([1150.0, 650.0]).wgpu().build_ui(|ui| app.show(ui));
+        let (renderer, target_format) = test_renderer();
+        let mut app = TrackerApp::new(shared, Some(target_format));
+        let mut harness =
+            egui_kittest::Harness::builder().with_size([1150.0, 650.0]).renderer(renderer).build_ui(|ui| app.show(ui));
         harness.run();
         harness.snapshot(name);
     }
@@ -402,8 +413,10 @@ mod tests {
         shared.state.lock().unwrap().crop_overlay.locked = true;
         *shared.latest.lock().unwrap() = Some(Arc::new(View { frame, blobs }));
 
-        let mut app = TrackerApp::new(shared);
-        let mut harness = egui_kittest::Harness::builder().with_size([1050.0, 600.0]).wgpu().build_ui(|ui| app.show(ui));
+        let (renderer, target_format) = test_renderer();
+        let mut app = TrackerApp::new(shared, Some(target_format));
+        let mut harness =
+            egui_kittest::Harness::builder().with_size([1050.0, 600.0]).renderer(renderer).build_ui(|ui| app.show(ui));
         harness.run();
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/screenshot.png");
         std::fs::create_dir_all(std::path::Path::new(path).parent().unwrap()).unwrap();

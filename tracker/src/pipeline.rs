@@ -1,6 +1,8 @@
 //! Mirrors the original Bonsai workflow this replaced: Grayscale → Crop → Threshold → FindContours →
 //! BinaryRegionAnalysis → SortBinaryRegions, reduced to the two largest blobs.
 
+use std::sync::Arc;
+
 use image::{GrayImage, Luma};
 use imageproc::region_labelling::{connected_components, Connectivity};
 
@@ -44,22 +46,32 @@ pub struct Pipeline {
 #[derive(Default)]
 pub struct MaskCache {
     key: Option<(Crop, u32, u32)>,
-    mask: Option<GrayImage>,
+    mask: Option<Arc<GrayImage>>,
 }
 
 impl MaskCache {
     /// `None` when there's no crop, i.e. everything is inside.
     pub fn get(&mut self, crop: &Crop, width: u32, height: u32) -> Option<&GrayImage> {
+        self.update(crop, width, height);
+        self.mask.as_deref()
+    }
+
+    /// Like [`MaskCache::get`], but shareable; the same `Arc` is returned until the mask changes.
+    pub fn get_shared(&mut self, crop: &Crop, width: u32, height: u32) -> Option<Arc<GrayImage>> {
+        self.update(crop, width, height);
+        self.mask.clone()
+    }
+
+    fn update(&mut self, crop: &Crop, width: u32, height: u32) {
         let key = (*crop, width, height);
         if self.key != Some(key) {
             self.mask = (*crop != Crop::None).then(|| {
-                GrayImage::from_fn(width, height, |x, y| {
+                Arc::new(GrayImage::from_fn(width, height, |x, y| {
                     Luma([if crop.contains([x as f32 + 0.5, y as f32 + 0.5]) { 255 } else { 0 }])
-                })
+                }))
             });
             self.key = Some(key);
         }
-        self.mask.as_ref()
     }
 }
 
