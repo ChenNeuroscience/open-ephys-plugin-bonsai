@@ -121,6 +121,8 @@ namespace CameraTracker {
                 return false;
             }
         }
+        // While the camera is still starting up, keep the stream going with empty samples.
+        sampleWriter->fillToNow();
         return true;
     }
 
@@ -144,7 +146,10 @@ namespace CameraTracker {
         // The stream's sample rate was declared in updateSettings(); a newer frame rate from the window waits
         // for the next signal chain update.
         qualityInfo.initialise(std::max(1, roundToInt(declaredFrameRate)), true);
-        sampleWriter = std::make_unique<SampleWriter>(sourceBuffers.getFirst(), NUM_VALUES, declaredFrameRate, qualityInfo);
+        // An empty sample: no LEDs, i.e. NaN coordinates and zero areas (see tracker.h).
+        const float nan = std::nanf("");
+        std::vector<float> empty = { nan, nan, nan, nan, 0.0f, 0.0f };
+        sampleWriter = std::make_unique<SampleWriter>(sourceBuffers.getFirst(), NUM_VALUES, declaredFrameRate, empty, qualityInfo);
 
         String config = buildTrackerConfig();
         LOGC("Starting tracker with config: ", config);
@@ -280,7 +285,7 @@ namespace CameraTracker {
             continuousChannels->add(new ContinuousChannel({
                 ContinuousChannel::Type::AUX,
                 "BONS" + std::to_string(i+1),
-                i == 0 ? "float32 camera timestamp (s, relative to first frame)" : "float32 value from tracker",
+                i == 0 ? "float32 timestamp: seconds since acquisition started" : "float32 value from tracker",
                 "BONS" + std::to_string(i+1),
                 6.,  // channel bitvolts scaling, not especially relevant here
                 stream

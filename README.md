@@ -109,12 +109,24 @@ The Spinnaker support has only had light testing with a real camera so far.
 
 ### Timestamps and sample quality
 
-The plugin "smooths" samples onto the frame rate set in the tracker window, using the camera's timestamps
-relative to the first frame. A sample more than half a period early is dropped; if a sample is more than
-half a period late, the gap is filled with NaN samples. The editor's quality widget shows the last 10
-seconds: green for samples used (a full bar means on time, shorter bars mean slightly early or late),
-white for gap-filled samples, and red for dropped ones. This reflects the camera's timestamps, not
-arrival times, so it gives internal consistency rather than precise alignment with other data sources.
+The stream starts when acquisition does. Until the camera's first frame arrives (opening a camera can
+take a few hundred milliseconds), the plugin emits empty samples on the host clock. The first frame is
+then placed at the time it arrived, and from there on the camera's own timestamps are used. The
+timestamp channel is seconds since acquisition started.
+
+Samples are "smoothed" onto the frame rate set in the tracker window. A sample more than half a period
+early is dropped. If a sample is more than half a period late, the gap is filled with empty samples. Empty
+samples have a normal timestamp, NaN coordinates and zero areas, the same as a frame where no LED was
+seen.
+
+The editor's quality widget shows the last 10 seconds:
+- **green:** samples used; a full bar is on time, shorter bars are slightly early or late;
+- **white:** empty, gap-filled samples (including the start-up ones);
+- **red:** dropped samples.
+
+This reflects the camera's timestamps, not arrival times, so it gives internal consistency rather than
+precise alignment with other data sources. The first frame's arrival latency, typically a few
+milliseconds, becomes a constant offset.
 
 The timestamp channel is a 32-bit float, which holds about three decimal places up to ~5 hours. Restart
 acquisition at least that often.
