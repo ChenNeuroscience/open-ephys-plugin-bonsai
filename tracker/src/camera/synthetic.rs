@@ -92,6 +92,7 @@ impl Camera for SyntheticCamera {
 
     fn controls(&self) -> CameraControls {
         CameraControls {
+            frame_rate_set: true,
             frame_rate: Some(Range { min: 1.0, max: 500.0, current: self.fps }),
             exposure: Some(Range { min: EXPOSURE_RANGE.0, max: EXPOSURE_RANGE.1, current: self.exposure }),
             gain: Some(Range { min: GAIN_RANGE.0, max: GAIN_RANGE.1, current: self.gain }),

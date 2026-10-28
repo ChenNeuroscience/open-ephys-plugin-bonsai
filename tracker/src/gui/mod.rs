@@ -93,6 +93,14 @@ fn held_rate_warning(current: Option<(f64, f64)>, now: f64, measured: f64, activ
 /// Height of the strip below the video (LED readout, warnings); fixed so the video doesn't jump.
 const STRIP_HEIGHT: f32 = 92.0;
 
+/// A measured frame rate tidied for use as the setting: whole numbers when within 0.05% (the measurement,
+/// from camera timestamps over several seconds, is far more precise than that), otherwise 2 decimals, so
+/// 29.97 stays 29.97.
+fn snap_frame_rate(measured: f64) -> f64 {
+    let whole = measured.round();
+    if (measured - whole).abs() <= 0.0005 * measured { whole } else { (measured * 100.0).round() / 100.0 }
+}
+
 /// Measured and declared frame rates may differ by this fraction before the warning appears.
 const RATE_TOLERANCE: f64 = 0.02;
 /// Seconds the frame rate warning stays up after the last time it applied.
@@ -182,12 +190,25 @@ impl TrackerApp {
             ui.disable();
         }
         let controls = *self.shared.controls.lock().unwrap();
+        let measured = self.shared.stats.lock().unwrap().measured_fps as f64;
         let settings = &mut self.state.camera;
         egui::Grid::new("camera").num_columns(2).show(ui, |ui| {
             ui.label("Frame rate");
-            let range = controls.frame_rate.map_or(1.0..=1000.0, |r| r.min..=r.max);
-            ui.add(egui::DragValue::new(&mut settings.frame_rate).range(range).speed(0.1).max_decimals(2).suffix(" fps"))
-                .on_hover_text("Also the sample rate of the Open Ephys data stream");
+            ui.horizontal(|ui| {
+                let range = controls.frame_rate.map_or(1.0..=1000.0, |r| r.min..=r.max);
+                ui.add(egui::DragValue::new(&mut settings.frame_rate).range(range).speed(0.1).max_decimals(2).suffix(" fps"))
+                    .on_hover_text("Also the sample rate of the Open Ephys data stream");
+                // Only needed when the camera won't take a frame rate, so its own rate has to be matched.
+                if !controls.frame_rate_set {
+                    let detect = ui.add_enabled(measured > 0.0, egui::Button::new("Detect")).on_hover_text(
+                        "This camera won't take a frame rate, so set this to the rate it's delivering (measured over \
+                         the last few seconds). Like any frame rate change, it applies from the next acquisition.",
+                    );
+                    if detect.clicked() {
+                        settings.frame_rate = snap_frame_rate(measured);
+                    }
+                }
+            });
             ui.end_row();
             control_row(ui, "Exposure", &mut settings.exposure, controls.exposure, " µs", true);
             control_row(ui, "Gain", &mut settings.gain, controls.gain, " dB", false);
@@ -231,21 +252,23 @@ impl TrackerApp {
         if let Some((_, measured)) = self.rate_warning {
             let rtl = egui::Layout::right_to_left(egui::Align::Center);
             region(ui, rect.left(), split - 12.0, rtl, &mut |ui| {
+                let width = (ui.available_width() - 16.0).clamp(120.0, 380.0);
                 egui::Frame::group(ui.style()).stroke(egui::Stroke::new(1.0, strip::AMBER)).show(ui, |ui| {
-                    ui.set_max_width(380.0);
+                    ui.set_max_width(width);
                     ui.vertical(|ui| {
                         ui.label(
                             RichText::new(format!("Camera running at {measured:.1} fps, stream declared at {active} fps"))
                                 .color(strip::AMBER)
                                 .strong(),
                         );
-                        ui.label(
-                            RichText::new(
-                                "Samples will be dropped or gap-filled. Set the camera's frame rate (e.g. in SpinView), \
-                                 or match it in the Camera section.",
-                            )
-                            .small(),
-                        );
+                        let advice = if self.shared.controls.lock().unwrap().frame_rate_set {
+                            "Samples will be dropped or gap-filled. The camera may be triggered externally, or not \
+                             keeping up (e.g. exposure too long for this rate)."
+                        } else {
+                            "Samples will be dropped or gap-filled. This camera won't take a frame rate: use Detect in \
+                             the Camera section to match it (applies from the next acquisition)."
+                        };
+                        ui.label(RichText::new(advice).small());
                     });
                 });
             });
@@ -513,7 +536,12 @@ mod tests {
     }
 
     /// Renders the whole window. Run with UPDATE_SNAPSHOTS=1 to accept changes; see tests/snapshots/.
-    fn window_snapshot(name: &str, recording: bool, measured_fps: f32, configure: impl FnOnce(&mut TrackerState)) {
+    fn window_snapshot(
+        name: &str,
+        recording: bool,
+        setup: impl FnOnce(&Shared),
+        configure: impl FnOnce(&mut TrackerState),
+    ) {
         let mut camera = SyntheticCamera::new(640, 480, 50.0);
         let frame = camera.next_frame().unwrap().unwrap();
         let mut state = TrackerState::default();
@@ -529,7 +557,7 @@ mod tests {
             active_frame_rate: 50.0,
             controls: camera.controls().into(),
             recording: recording.into(),
-            stats: crate::tracker::Stats { measured_fps, ..Default::default() }.into(),
+            stats: crate::tracker::Stats { measured_fps: 50.0, ..Default::default() }.into(),
             // 10 s at 50 fps of plausible LED areas, with a few dropouts.
             led_history: (0..500)
                 .map(|i| {
@@ -544,6 +572,7 @@ mod tests {
             ..Default::default()
         });
         *shared.latest.lock().unwrap() = Some(Arc::new(View { frame, blobs }));
+        setup(&shared);
 
         let (renderer, target_format) = test_renderer();
         let mut app = TrackerApp::new(shared, Some(target_format));
@@ -555,12 +584,19 @@ mod tests {
 
     #[test]
     fn window_crop_editable_rulers_locked() {
-        window_snapshot("tracker_window", false, 50.0, |s| s.calibration.overlay.locked = true);
+        window_snapshot("tracker_window", false, |_| {}, |s| s.calibration.overlay.locked = true);
     }
 
     #[test]
     fn window_detection_hidden() {
-        window_snapshot("tracker_window_detection_hidden", false, 50.0, |s| s.detection_overlay.visible = false);
+        window_snapshot("tracker_window_detection_hidden", false, |_| {}, |s| s.detection_overlay.visible = false);
+    }
+
+    #[test]
+    fn detected_rates_are_tidied() {
+        assert_eq!(snap_frame_rate(30.004), 30.0);
+        assert_eq!(snap_frame_rate(29.9701), 29.97);
+        assert_eq!(snap_frame_rate(49.2), 49.2);
     }
 
     #[test]
@@ -575,19 +611,25 @@ mod tests {
         assert_eq!(held_rate_warning(None, 0.0, 0.0, 50.0), None);
     }
 
+    /// A camera that won't take a frame rate, running at 30 fps against a declared 50.
+    fn rate_mismatch(shared: &Shared) {
+        shared.stats.lock().unwrap().measured_fps = 30.0;
+        shared.controls.lock().unwrap().frame_rate_set = false;
+    }
+
     #[test]
     fn window_rate_warning() {
-        window_snapshot("tracker_window_rate_warning", false, 30.0, |_| {});
+        window_snapshot("tracker_window_rate_warning", false, rate_mismatch, |_| {});
     }
 
     #[test]
     fn window_recording() {
-        window_snapshot("tracker_window_recording", true, 50.0, |_| {});
+        window_snapshot("tracker_window_recording", true, |_| {}, |_| {});
     }
 
     #[test]
     fn window_crop_hidden() {
-        window_snapshot("tracker_window_crop_hidden", false, 50.0, |s| s.crop_overlay.visible = false);
+        window_snapshot("tracker_window_crop_hidden", false, |_| {}, |s| s.crop_overlay.visible = false);
     }
 
     /// Regenerates docs/screenshot.png from a live frame of tools/fake_camera.py (needs python3):

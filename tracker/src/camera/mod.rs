@@ -51,6 +51,9 @@ pub trait Camera: Send {
 /// Supported settings, as reported by the camera. `None` means not supported.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct CameraControls {
+    /// Whether the camera took the requested frame rate. If not, it runs at whatever it's configured for,
+    /// and the window offers to detect that rate instead.
+    pub frame_rate_set: bool,
     pub frame_rate: Option<Range>,
     pub exposure: Option<Range>,
     pub gain: Option<Range>,

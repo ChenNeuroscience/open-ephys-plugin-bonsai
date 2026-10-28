@@ -255,6 +255,8 @@ pub struct SpinnakerCamera {
     map: Handle,
     /// Camera clock timestamps from chunk data (as Bonsai used), rather than the transport layer's.
     chunk_timestamps: bool,
+    /// The camera accepted the requested frame rate.
+    frame_rate_set: bool,
     description: String,
     /// Things that didn't go to plan when configuring the camera, for the window to show.
     warnings: Vec<String>,
@@ -277,6 +279,7 @@ impl SpinnakerCamera {
             camera: std::ptr::null_mut(),
             map: std::ptr::null_mut(),
             chunk_timestamps: false,
+            frame_rate_set: false,
             description: String::new(),
             warnings: Vec::new(),
         };
@@ -360,9 +363,13 @@ impl SpinnakerCamera {
         let _ = api
             .set_bool(map, "AcquisitionFrameRateEnable", true)
             .or_else(|_| api.set_bool(map, "AcquisitionFrameRateEnabled", true));
-        if let Err(e) = api.set_float(map, "AcquisitionFrameRate", fps) {
-            notes.push(format!("Couldn't set the frame rate ({e}); it's whatever the camera is configured for."));
-        }
+        self.frame_rate_set = match api.set_float(map, "AcquisitionFrameRate", fps) {
+            Ok(()) => true,
+            Err(e) => {
+                notes.push(format!("Couldn't set the frame rate ({e}); it's whatever the camera is configured for."));
+                false
+            }
+        };
         self.warnings = notes;
         Ok(())
     }
@@ -443,6 +450,7 @@ impl Camera for SpinnakerCamera {
     fn controls(&self) -> CameraControls {
         let api = self.api;
         CameraControls {
+            frame_rate_set: self.frame_rate_set,
             frame_rate: api.get_float(self.map, "AcquisitionFrameRate"),
             exposure: api.get_float(self.map, "ExposureTime"),
             gain: api.get_float(self.map, "Gain"),
