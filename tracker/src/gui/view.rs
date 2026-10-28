@@ -99,7 +99,7 @@ impl VideoView {
         let callback = video_gpu::VideoCallback {
             target_format,
             view: view.clone(),
-            mask: self.mask.get_shared(&state.pipeline.crop, state.pipeline.edge.width, w, h),
+            mask: self.mask.get_shared(&state.pipeline.crop, state.pipeline.edge_width(), w, h),
             threshold: state.pipeline.threshold,
             edge_threshold: state.pipeline.edge_threshold(),
             highlight: state.detection_overlay.visible,
@@ -110,8 +110,8 @@ impl VideoView {
         self.interact(ui, &response, xf, state);
 
         draw_crop(&painter, xf, &state.pipeline.crop, state.crop_overlay);
-        if state.crop_overlay.visible && state.pipeline.edge.width > 0.0 {
-            if let Some(inset) = state.pipeline.crop.inset(state.pipeline.edge.width) {
+        if state.crop_overlay.visible && state.pipeline.edge_width() > 0.0 {
+            if let Some(inset) = state.pipeline.crop.inset(state.pipeline.edge_width()) {
                 draw_outline(&painter, xf, &inset, Stroke::new(1.0, CROP_COLOUR), true);
             }
         }

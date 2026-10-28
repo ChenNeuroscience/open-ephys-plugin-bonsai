@@ -31,9 +31,9 @@ While acquisition runs, a tracker window shows the live video with:
 - **Crop**: none, circle, square or rectangle. Drag to move, use the handles to resize, and use the stalk to
   rotate (shift snaps to 15°). The eye shows the whole frame with the crop outline, or hides it and masks
   out everything outside the crop.
-- **Detection**: brightness threshold and min/max region area. With a crop, **Near edge** sets a higher
-  threshold within a band inside the boundary (shown dashed), so LED reflections off the walls don't
-  count. The eye highlights above-threshold pixels and circles the two detected regions.
+- **Detection**: brightness threshold and min/max region area. With a crop, **Threshold edge** sets a
+  higher threshold within a band inside the boundary (shown dashed), so LED reflections off the walls
+  don't count. The eye highlights above-threshold pixels and circles the two detected regions.
 - **Calibration**: rulers you drag onto things of known size and give a length in cm. The mean pixels per
   metre is shown in the panel and over the video, even while the rulers are hidden.
 - Below the video: a chart of the two LEDs' areas over the last 10 s (to check they stay distinct, e.g.

@@ -129,25 +129,32 @@ impl PipelineConfig {
     /// The threshold for pixels within the edge band; never below `threshold` (the pipeline's quick
     /// rejection of empty rows relies on that). 255 means nothing there can count.
     pub fn edge_threshold(&self) -> u8 {
-        if self.edge.width <= 0.0 || self.crop == Crop::None {
+        if self.edge_width() <= 0.0 {
             return self.threshold;
         }
         self.edge.threshold.max(self.threshold)
     }
+
+    /// Width of the edge band in effect: 0 when it's switched off or there's no crop.
+    pub fn edge_width(&self) -> f32 {
+        if self.edge.enabled && self.crop != Crop::None { self.edge.width.max(0.0) } else { 0.0 }
+    }
 }
 
-/// Pixels within `width` of the crop boundary use `threshold` instead of the main threshold.
+/// When enabled, pixels within `width` of the crop boundary use `threshold` instead of the main threshold.
+/// The values are kept while it's switched off.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct EdgeThreshold {
-    /// Pixels; 0 turns it off.
+    pub enabled: bool,
+    /// Pixels.
     pub width: f32,
     pub threshold: u8,
 }
 
 impl Default for EdgeThreshold {
     fn default() -> Self {
-        EdgeThreshold { width: 0.0, threshold: 250 }
+        EdgeThreshold { enabled: false, width: 25.0, threshold: 250 }
     }
 }
 

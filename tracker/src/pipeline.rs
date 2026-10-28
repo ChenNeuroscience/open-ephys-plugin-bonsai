@@ -201,7 +201,7 @@ impl Pipeline {
     /// Returns blobs passing the area filter, largest first.
     pub fn process(&mut self, image: &GrayImage, config: &PipelineConfig) -> Vec<Blob> {
         let (width, height) = image.dimensions();
-        let spans = self.spans.get(&config.crop, config.edge.width, width, height);
+        let spans = self.spans.get(&config.crop, config.edge_width(), width, height);
         let raw = image.as_raw();
         let threshold = config.threshold;
         let edge_threshold = config.edge_threshold(); // >= threshold
@@ -344,8 +344,8 @@ mod tests {
     /// The previous, straightforward implementation (mask, label every pixel, accumulate), as a reference.
     fn reference_process(image: &GrayImage, config: &PipelineConfig) -> Vec<Blob> {
         use imageproc::region_labelling::{connected_components, Connectivity};
-        let inset = config.crop.inset(config.edge.width);
-        let banded = config.edge.width > 0.0 && config.crop != Crop::None;
+        let inset = config.crop.inset(config.edge_width());
+        let banded = config.edge_width() > 0.0;
         let binary = GrayImage::from_fn(image.width(), image.height(), |x, y| {
             let p = [x as f32 + 0.5, y as f32 + 0.5];
             let inside = config.crop.contains(p);
@@ -407,7 +407,7 @@ mod tests {
             };
             // Half the cases have an edge band with threshold 150, so values of 120 and 200 land on different
             // sides of it (and both above the main threshold of 100).
-            let edge = EdgeThreshold { width: if case % 8 < 4 { 0.0 } else { rand(15) as f32 }, threshold: 150 };
+            let edge = EdgeThreshold { enabled: case % 8 >= 4, width: rand(15) as f32, threshold: 150 };
             let config = PipelineConfig { threshold: 100, min_area: rand(3), max_area: None, crop, edge };
             let ours = sorted(Pipeline::default().process(&img, &config));
             let reference = sorted(reference_process(&img, &config));
@@ -425,7 +425,7 @@ mod tests {
         assert_eq!(Pipeline::default().process(&img, &config).len(), 2);
 
         // Within 30 px of the boundary the threshold is 230, so the 220 LED there doesn't count.
-        config.edge = EdgeThreshold { width: 30.0, threshold: 230 };
+        config.edge = EdgeThreshold { enabled: true, width: 30.0, threshold: 230 };
         assert_eq!(Pipeline::default().process(&img, &config), vec![Blob { x: 99.5, y: 99.5, area: 16 }]);
     }
 

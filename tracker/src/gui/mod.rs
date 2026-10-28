@@ -280,7 +280,25 @@ impl TrackerApp {
             ui.disable();
         }
         let p = &mut self.state.pipeline;
-        ui.add(egui::Slider::new(&mut p.threshold, 0..=255).text("threshold"));
+        ui.horizontal(|ui| {
+            let label = ui.label("Threshold");
+            ui.add(egui::Slider::new(&mut p.threshold, 0..=255)).labelled_by(label.id);
+        });
+        if p.crop != Crop::None {
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut p.edge.enabled, "Threshold edge").on_hover_text(
+                    "A higher threshold for pixels near the crop boundary, so LED reflections off the walls don't \
+                     count. The dashed line shows where it stops.",
+                );
+                if p.edge.enabled {
+                    p.edge.threshold = p.edge.threshold.max(p.threshold);
+                    ui.add(egui::DragValue::new(&mut p.edge.threshold).range(p.threshold..=255).prefix("≥ "))
+                        .on_hover_text("Threshold within the band (at least the main threshold)");
+                    ui.label("within");
+                    ui.add(egui::DragValue::new(&mut p.edge.width).range(1.0..=1000.0).speed(0.5).suffix(" px"));
+                }
+            });
+        }
         ui.horizontal(|ui| {
             ui.label("Min area");
             ui.add(egui::DragValue::new(&mut p.min_area).range(0..=100_000).suffix(" px"));
@@ -294,18 +312,6 @@ impl TrackerApp {
                 v
             });
         });
-        if p.crop != Crop::None {
-            ui.horizontal(|ui| {
-                let label = ui.label("Near edge").on_hover_text(
-                    "A higher threshold for pixels this close to the crop boundary, so LED reflections off the \
-                     walls don't count. The dashed line shows where it stops. 0 px turns it off.",
-                );
-                p.edge.threshold = p.edge.threshold.max(p.threshold);
-                ui.add(egui::DragValue::new(&mut p.edge.threshold).range(p.threshold..=255)).labelled_by(label.id);
-                ui.label("within");
-                ui.add(egui::DragValue::new(&mut p.edge.width).range(0.0..=1000.0).speed(0.5).suffix(" px"));
-            });
-        }
     }
 
     fn crop(&mut self, ui: &mut egui::Ui) {
@@ -548,7 +554,7 @@ mod tests {
         let frame = camera.next_frame().unwrap().unwrap();
         let mut state = TrackerState::default();
         state.pipeline.crop = Crop::Rectangle { center: [330.0, 250.0], width: 420.0, height: 300.0, angle: 0.3 };
-        state.pipeline.edge = crate::config::EdgeThreshold { width: 25.0, threshold: 250 };
+        state.pipeline.edge = crate::config::EdgeThreshold { enabled: true, width: 25.0, threshold: 250 };
         state.calibration.rulers = vec![
             Ruler { a: [120.0, 420.0], b: [480.0, 420.0], length_cm: 100.0 },
             Ruler { a: [560.0, 80.0], b: [560.0, 260.0], length_cm: 0.0 },
