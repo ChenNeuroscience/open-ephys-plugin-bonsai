@@ -30,9 +30,9 @@ const ROTATE_SNAP: f32 = 15.0 * PI / 180.0;
 enum Target {
     CropMove,
     CropRadius,
-    CropCorner,
-    /// Rectangle side: axis 0 = width, 1 = height; sign says which of the two sides.
-    CropEdge { axis: usize, sign: f32 },
+    /// A side or corner of a square or rectangle: for x then y, which side moves (+1 or -1), or 0 if neither.
+    /// The opposite side(s) stay put.
+    CropResize { sides: [i8; 2] },
     CropRotate,
     RulerEnd { ruler: usize, end: usize },
     RulerMove(usize),
@@ -169,25 +169,54 @@ fn handles(xf: Xform, state: &TrackerState) -> Vec<(Target, [f32; 2])> {
     out
 }
 
+/// Every corner and edge midpoint of a square or rectangle, every compass point of a circle, plus the
+/// rotation handle.
 fn crop_handles(crop: &Crop, stalk: f32) -> Vec<(Target, [f32; 2])> {
-    match *crop {
-        Crop::None => vec![],
-        Crop::Circle { center, radius } => vec![(Target::CropRadius, [center[0] + radius, center[1]])],
-        Crop::Square { center, size, angle } => vec![
-            (Target::CropCorner, from_local(center, angle, [size / 2.0, size / 2.0])),
-            (Target::CropRotate, from_local(center, angle, [0.0, -size / 2.0 - stalk])),
-        ],
-        Crop::Rectangle { center, width, height, angle } => {
-            let (hw, hh) = (width / 2.0, height / 2.0);
-            vec![
-                (Target::CropEdge { axis: 0, sign: 1.0 }, from_local(center, angle, [hw, 0.0])),
-                (Target::CropEdge { axis: 0, sign: -1.0 }, from_local(center, angle, [-hw, 0.0])),
-                (Target::CropEdge { axis: 1, sign: 1.0 }, from_local(center, angle, [0.0, hh])),
-                (Target::CropEdge { axis: 1, sign: -1.0 }, from_local(center, angle, [0.0, -hh])),
-                (Target::CropRotate, from_local(center, angle, [0.0, -hh - stalk])),
-            ]
+    let (Some(center), Some([hw, hh])) = (crop.center(), crop.half_extents()) else { return vec![] };
+    if let Crop::Circle { .. } = crop {
+        return [[1.0, 0.0], [-1.0, 0.0], [0.0, 1.0], [0.0, -1.0]]
+            .map(|[dx, dy]| (Target::CropRadius, [center[0] + dx * hw, center[1] + dy * hh]))
+            .to_vec();
+    }
+    let angle = crop.angle();
+    let mut handles: Vec<_> = [-1i8, 0, 1]
+        .into_iter()
+        .flat_map(|sx| [-1i8, 0, 1].map(|sy| [sx, sy]))
+        .filter(|&sides| sides != [0, 0])
+        .map(|sides| {
+            let local = [sides[0] as f32 * hw, sides[1] as f32 * hh];
+            (Target::CropResize { sides }, from_local(center, angle, local))
+        })
+        .collect();
+    handles.push((Target::CropRotate, from_local(center, angle, [0.0, -hh - stalk])));
+    handles
+}
+
+/// New centre and half extents of a box after dragging the given `sides` to `p`, keeping the opposite
+/// sides where they are. A square keeps equal sides, centred on any axis that isn't being dragged.
+fn resize_box(center: [f32; 2], half: [f32; 2], angle: f32, sides: [i8; 2], p: [f32; 2], square: bool) -> ([f32; 2], [f32; 2]) {
+    let l = to_local(center, angle, p);
+    let mut fixed = [0.0; 2];
+    let mut size = [2.0 * half[0], 2.0 * half[1]];
+    for axis in 0..2 {
+        let sign = sides[axis] as f32;
+        if sign != 0.0 {
+            fixed[axis] = -sign * half[axis];
+            size[axis] = (sign * (l[axis] - fixed[axis])).max(MIN_SIZE);
         }
     }
+    if square {
+        let moved = (0..2).filter(|&a| sides[a] != 0).map(|a| size[a]);
+        let s = moved.fold(0.0, f32::max);
+        size = [s, s];
+    }
+    let mut mid = [0.0; 2];
+    for axis in 0..2 {
+        if sides[axis] != 0 {
+            mid[axis] = fixed[axis] + sides[axis] as f32 * size[axis] / 2.0;
+        }
+    }
+    (from_local(center, angle, mid), [size[0] / 2.0, size[1] / 2.0])
 }
 
 fn hit(pos: Pos2, xf: Xform, state: &TrackerState) -> Option<Target> {
@@ -222,20 +251,13 @@ fn apply_drag(target: Target, p: [f32; 2], delta: [f32; 2], snap: bool, state: &
         (Target::CropRadius, Crop::Circle { center, radius }) => {
             *radius = (p[0] - center[0]).hypot(p[1] - center[1]).max(MIN_SIZE);
         }
-        (Target::CropCorner, Crop::Square { center, size, angle }) => {
-            let l = to_local(*center, *angle, p);
-            *size = (2.0 * l[0].abs().max(l[1].abs())).max(MIN_SIZE);
+        (Target::CropResize { sides }, Crop::Square { center, size, angle }) => {
+            let (c, half) = resize_box(*center, [*size / 2.0; 2], *angle, sides, p, true);
+            (*center, *size) = (c, 2.0 * half[0]);
         }
-        (Target::CropEdge { axis, sign }, Crop::Rectangle { center, width, height, angle }) => {
-            // Move one side, keeping the opposite side where it is.
-            let l = to_local(*center, *angle, p);
-            let half = if axis == 0 { *width / 2.0 } else { *height / 2.0 };
-            let fixed = -sign * half;
-            let moving = if sign > 0.0 { l[axis].max(fixed + MIN_SIZE) } else { l[axis].min(fixed - MIN_SIZE) };
-            let mut mid = [0.0; 2];
-            mid[axis] = (moving + fixed) / 2.0;
-            *center = from_local(*center, *angle, mid);
-            *if axis == 0 { width } else { height } = (moving - fixed).abs();
+        (Target::CropResize { sides }, Crop::Rectangle { center, width, height, angle }) => {
+            let (c, half) = resize_box(*center, [*width / 2.0, *height / 2.0], *angle, sides, p, false);
+            (*center, *width, *height) = (c, 2.0 * half[0], 2.0 * half[1]);
         }
         (Target::CropRotate, Crop::Square { center, angle, .. } | Crop::Rectangle { center, angle, .. }) => {
             // The handle sits "above" the shape, i.e. at -90 degrees in its own frame.
@@ -354,7 +376,7 @@ mod tests {
         let before = rect_corners(&state.pipeline.crop);
         // Drag the +x side outwards by 20px along the rectangle's own x axis.
         let target = from_local([100.0, 100.0], 0.5, [50.0, 0.0]);
-        apply_drag(Target::CropEdge { axis: 0, sign: 1.0 }, target, [0.0, 0.0], false, &mut state);
+        apply_drag(Target::CropResize { sides: [1, 0] }, target, [0.0, 0.0], false, &mut state);
 
         let Crop::Rectangle { width, height, .. } = state.pipeline.crop else { unreachable!() };
         assert!((width - 80.0).abs() < 1e-3 && (height - 40.0).abs() < 1e-3);
@@ -363,6 +385,42 @@ mod tests {
             // the -x side's corners
             assert!((after[i][0] - before[i][0]).abs() < 1e-3 && (after[i][1] - before[i][1]).abs() < 1e-3);
         }
+    }
+
+    fn close(a: [f32; 2], b: [f32; 2]) -> bool {
+        (a[0] - b[0]).abs() < 1e-3 && (a[1] - b[1]).abs() < 1e-3
+    }
+
+    #[test]
+    fn dragging_a_rotated_rectangle_corner_keeps_the_opposite_corner() {
+        let mut state = TrackerState::default();
+        state.pipeline.crop = Crop::Rectangle { center: [100.0, 100.0], width: 60.0, height: 40.0, angle: 0.5 };
+        let before = rect_corners(&state.pipeline.crop);
+        // Drag the (+x, +y) corner out by 10 and 20 px in the rectangle's own frame.
+        let target = from_local([100.0, 100.0], 0.5, [40.0, 40.0]);
+        apply_drag(Target::CropResize { sides: [1, 1] }, target, [0.0, 0.0], false, &mut state);
+
+        let Crop::Rectangle { width, height, .. } = state.pipeline.crop else { unreachable!() };
+        assert!((width - 70.0).abs() < 1e-3 && (height - 60.0).abs() < 1e-3);
+        assert!(close(rect_corners(&state.pipeline.crop)[0], before[0])); // the (-x, -y) corner
+    }
+
+    #[test]
+    fn square_edge_keeps_opposite_edge_and_stays_centred_across() {
+        let mut state = TrackerState::default();
+        state.pipeline.crop = Crop::Square { center: [0.0, 0.0], size: 10.0, angle: 0.0 };
+        apply_drag(Target::CropResize { sides: [0, -1] }, [3.0, -15.0], [0.0, 0.0], false, &mut state);
+        // Top edge moved from y=-5 to y=-15 with the bottom edge (y=5) fixed: size 20, centre (0, -5).
+        assert_eq!(state.pipeline.crop, Crop::Square { center: [0.0, -5.0], size: 20.0, angle: 0.0 });
+    }
+
+    #[test]
+    fn square_corner_keeps_opposite_corner() {
+        let mut state = TrackerState::default();
+        state.pipeline.crop = Crop::Square { center: [0.0, 0.0], size: 10.0, angle: 0.0 };
+        // Drag (-x, +y) corner from (-5, 5) to (-25, 12): the larger extent (30 wide) wins.
+        apply_drag(Target::CropResize { sides: [-1, 1] }, [-25.0, 12.0], [0.0, 0.0], false, &mut state);
+        assert_eq!(state.pipeline.crop, Crop::Square { center: [-10.0, 10.0], size: 30.0, angle: 0.0 });
     }
 
     #[test]
