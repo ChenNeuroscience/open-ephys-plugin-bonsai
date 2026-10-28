@@ -13,6 +13,8 @@ use crate::pipeline::{Blob, Pipeline, TrackerSample};
 
 /// Seconds of frames that `Stats::measured_fps` is counted over.
 const RATE_WINDOW: f64 = 5.0;
+/// Seconds of LED areas kept in `Shared::led_history`.
+pub const LED_HISTORY: f64 = 10.0;
 
 /// Enough for tens of seconds at typical frame rates if Open Ephys stalls.
 const SAMPLE_QUEUE_LEN: usize = 4096;
@@ -52,6 +54,8 @@ pub struct Shared {
     pub recording: AtomicBool,
     /// The tracker window is open, or has been asked to open.
     pub window_open: AtomicBool,
+    /// (camera timestamp, [big, small] LED areas) per frame over the last `LED_HISTORY` seconds; 0 = not seen.
+    pub led_history: Mutex<std::collections::VecDeque<(f64, [u32; 2])>>,
     /// Size of the latest frame.
     pub frame_size: Mutex<Option<[u32; 2]>>,
     /// Problems configuring the camera, shown in the window's Camera section.
@@ -237,6 +241,14 @@ fn capture_loop(shared: &Shared, camera_config: &CameraConfig, tx: &Sender<Track
             }
             last = Some((frame.id, frame.timestamp));
 
+            {
+                let mut history = shared.led_history.lock().unwrap();
+                let area = |i: usize| blobs.get(i).map_or(0, |b| b.area);
+                history.push_back((frame.timestamp, [area(0), area(1)]));
+                while history.front().is_some_and(|&(t, _)| t < frame.timestamp - LED_HISTORY) {
+                    history.pop_front();
+                }
+            }
             *shared.frame_size.lock().unwrap() = Some([frame.image.width(), frame.image.height()]);
             *shared.latest.lock().unwrap() = Some(Arc::new(View { frame, blobs }));
             shared.request_repaint();

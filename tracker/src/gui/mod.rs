@@ -1,6 +1,7 @@
 //! Live view window: the latest frame with overlays (see `view`), plus a side panel of controls.
 
 mod icons;
+mod strip;
 mod video_gpu;
 mod view;
 
@@ -88,6 +89,9 @@ fn held_rate_warning(current: Option<(f64, f64)>, now: f64, measured: f64, activ
     }
     current.filter(|&(until, _)| now < until)
 }
+
+/// Height of the strip below the video (LED readout, warnings); fixed so the video doesn't jump.
+const STRIP_HEIGHT: f32 = 92.0;
 
 /// Measured and declared frame rates may differ by this fraction before the warning appears.
 const RATE_TOLERANCE: f64 = 0.02;
@@ -198,31 +202,54 @@ impl TrackerApp {
         }
     }
 
-    /// Warns, in the corner of the video, when frames arrive at a different rate from the stream's declared
-    /// one (which is what actually matters). Uses the rate over the last few seconds, and once shown stays
-    /// for at least `RATE_WARNING_HOLD` seconds so it doesn't flicker.
-    fn rate_warning(&mut self, ctx: &egui::Context) {
-        let now = ctx.input(|i| i.time);
+    /// Below the video: the LED size readout at the right (while detection is visible) and, beside it, a
+    /// warning when frames arrive at a different rate from the stream's declared one (which is what actually
+    /// matters). The warning uses the rate over the last few seconds and, once shown, stays for at least
+    /// `RATE_WARNING_HOLD` seconds so it doesn't flicker.
+    fn bottom_strip(&mut self, ui: &mut egui::Ui) {
+        let now = ui.input(|i| i.time);
         let active = self.shared.active_frame_rate;
         let measured = self.shared.stats.lock().unwrap().measured_fps as f64;
         self.rate_warning = held_rate_warning(self.rate_warning, now, measured, active);
-        let Some((until, measured)) = self.rate_warning else { return };
-        ctx.request_repaint_after(std::time::Duration::from_secs_f64(until - now));
+        if let Some((until, _)) = self.rate_warning {
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(until - now));
+        }
 
-        let amber = egui::Color32::from_rgb(230, 170, 60);
-        egui::Area::new(egui::Id::unique("rate_warning"))
-            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-14.0, -14.0))
-            .interactable(false)
-            .show(ctx, |ui| {
-                egui::Frame::popup(ui.style()).stroke(egui::Stroke::new(1.0, amber)).show(ui, |ui| {
-                    ui.set_max_width(340.0);
-                    ui.label(RichText::new(format!("Camera running at {measured:.1} fps, stream declared at {active} fps")).color(amber).strong());
-                    ui.label("Samples will be dropped or gap-filled. Set the camera's frame rate (e.g. in SpinView), or match it in the Camera section.");
-                    for warning in self.shared.camera_warnings.lock().unwrap().iter() {
-                        ui.label(RichText::new(warning).small().weak());
-                    }
+        // The readout takes a fixed width at the right; the warning sits right-aligned beside it.
+        let rect = ui.available_rect_before_wrap();
+        let readout_width = if self.state.detection_overlay.visible { strip::READOUT_WIDTH } else { 0.0 };
+        let split = rect.right() - readout_width;
+        let region = |ui: &mut egui::Ui, min_x: f32, max_x: f32, layout, add: &mut dyn FnMut(&mut egui::Ui)| {
+            let r = egui::Rect::from_min_max(egui::pos2(min_x, rect.top()), egui::pos2(max_x, rect.bottom()));
+            ui.scope_builder(egui::UiBuilder::new().max_rect(r).layout(layout), |ui| add(ui));
+        };
+        if self.state.detection_overlay.visible {
+            let history = self.shared.led_history.lock().unwrap();
+            let ltr = egui::Layout::left_to_right(egui::Align::Min);
+            region(ui, split, rect.right(), ltr, &mut |ui| strip::led_readout(ui, &history));
+        }
+        if let Some((_, measured)) = self.rate_warning {
+            let rtl = egui::Layout::right_to_left(egui::Align::Center);
+            region(ui, rect.left(), split - 12.0, rtl, &mut |ui| {
+                egui::Frame::group(ui.style()).stroke(egui::Stroke::new(1.0, strip::AMBER)).show(ui, |ui| {
+                    ui.set_max_width(380.0);
+                    ui.vertical(|ui| {
+                        ui.label(
+                            RichText::new(format!("Camera running at {measured:.1} fps, stream declared at {active} fps"))
+                                .color(strip::AMBER)
+                                .strong(),
+                        );
+                        ui.label(
+                            RichText::new(
+                                "Samples will be dropped or gap-filled. Set the camera's frame rate (e.g. in SpinView), \
+                                 or match it in the Camera section.",
+                            )
+                            .small(),
+                        );
+                    });
                 });
             });
+        }
     }
 
     fn detection(&mut self, ui: &mut egui::Ui) {
@@ -449,12 +476,16 @@ impl TrackerApp {
             let mut locked = self.state.clone();
             locked.crop_overlay.locked = true;
             locked.calibration.overlay.locked = true;
-            egui::CentralPanel::default().show(ui, |ui| self.video.show(ui, &mut locked, latest.as_ref()));
+            egui::CentralPanel::default().show(ui, |ui| {
+                egui::Panel::bottom("strip").exact_size(STRIP_HEIGHT).show(ui, |ui| self.bottom_strip(ui));
+                self.video.show(ui, &mut locked, latest.as_ref())
+            });
         } else {
-            egui::CentralPanel::default().show(ui, |ui| self.video.show(ui, &mut self.state, latest.as_ref()));
+            egui::CentralPanel::default().show(ui, |ui| {
+                egui::Panel::bottom("strip").exact_size(STRIP_HEIGHT).show(ui, |ui| self.bottom_strip(ui));
+                self.video.show(ui, &mut self.state, latest.as_ref())
+            });
         }
-
-        self.rate_warning(ui.ctx());
 
         if self.state != before {
             *self.shared.state.lock().unwrap() = self.state.clone();
@@ -499,6 +530,16 @@ mod tests {
             controls: camera.controls().into(),
             recording: recording.into(),
             stats: crate::tracker::Stats { measured_fps, ..Default::default() }.into(),
+            // 10 s at 50 fps of plausible LED areas, with a few dropouts.
+            led_history: (0..500)
+                .map(|i| {
+                    let wobble = |p: f64| ((i as f64 * p).sin() * 3.0) as i32;
+                    let big = if i % 97 < 3 { 0 } else { (30 + wobble(0.11)) as u32 };
+                    let small = if i % 61 < 4 { 0 } else { (12 + wobble(0.07) / 2) as u32 };
+                    (i as f64 / 50.0, [big, small])
+                })
+                .collect::<std::collections::VecDeque<_>>()
+                .into(),
             state: state.into(),
             ..Default::default()
         });
