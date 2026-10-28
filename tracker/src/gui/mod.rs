@@ -90,8 +90,19 @@ fn held_rate_warning(current: Option<(f64, f64)>, now: f64, measured: f64, activ
     current.filter(|&(until, _)| now < until)
 }
 
-/// Height of the strip below the video (LED readout, warnings); fixed so the video doesn't jump.
+/// Height of the strip below the video (LED chart, warnings) with the chart open and closed. It only
+/// changes when the chart is opened or closed, so the video doesn't jump when warnings come and go.
 const STRIP_HEIGHT: f32 = 150.0;
+const STRIP_HEIGHT_CLOSED: f32 = 36.0;
+
+fn chart_id() -> egui::Id {
+    egui::Id::unique("led_chart")
+}
+
+/// Whether the LED chart below the video is open (it starts closed).
+fn chart_open(ctx: &egui::Context) -> bool {
+    egui::collapsing_header::CollapsingState::load(ctx, chart_id()).is_some_and(|s| s.is_open())
+}
 
 /// A measured frame rate tidied for use as the setting: whole numbers when within 0.05% (the measurement,
 /// from camera timestamps over several seconds, is far more precise than that), otherwise 2 decimals, so
@@ -227,6 +238,10 @@ impl TrackerApp {
     /// warning when frames arrive at a different rate from the stream's declared one (which is what actually
     /// matters). The warning uses the rate over the last few seconds and, once shown, stays for at least
     /// `RATE_WARNING_HOLD` seconds so it doesn't flicker.
+    fn strip_height(&self, ctx: &egui::Context) -> f32 {
+        if self.state.detection_overlay.visible && chart_open(ctx) { STRIP_HEIGHT } else { STRIP_HEIGHT_CLOSED }
+    }
+
     fn bottom_strip(&mut self, ui: &mut egui::Ui) {
         let now = ui.input(|i| i.time);
         let active = self.shared.active_frame_rate;
@@ -236,7 +251,9 @@ impl TrackerApp {
             ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(until - now));
         }
 
-        // The readout takes a fixed width at the right; the warning sits right-aligned beside it.
+        // The LED chart (collapsible, closed by default) takes a fixed width at the right; the warning sits
+        // right-aligned beside it, as one line while the chart is closed.
+        let chart_open = chart_open(ui.ctx());
         let rect = ui.available_rect_before_wrap();
         let readout_width = if self.state.detection_overlay.visible { strip::READOUT_WIDTH } else { 0.0 };
         let split = rect.right() - readout_width;
@@ -246,28 +263,34 @@ impl TrackerApp {
         };
         if self.state.detection_overlay.visible {
             let history = self.shared.led_history.lock().unwrap();
-            let ltr = egui::Layout::left_to_right(egui::Align::Min);
-            region(ui, split, rect.right(), ltr, &mut |ui| strip::led_chart(ui, &history));
+            let top_down = egui::Layout::top_down(egui::Align::Min);
+            region(ui, split, rect.right(), top_down, &mut |ui| {
+                egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), chart_id(), false)
+                    .show_header(ui, |ui| ui.label("LED sizes"))
+                    .body(|ui| strip::led_chart(ui, &history));
+            });
         }
         if let Some((_, measured)) = self.rate_warning {
-            let rtl = egui::Layout::right_to_left(egui::Align::Center);
+            let headline = format!("Camera running at {measured:.1} fps, stream declared at {active} fps");
+            let advice = if self.shared.controls.lock().unwrap().frame_rate_set {
+                "Samples will be dropped or gap-filled. The camera may be triggered externally, or not keeping up \
+                 (e.g. exposure too long for this rate)."
+            } else {
+                "Samples will be dropped or gap-filled. This camera won't take a frame rate: use Detect in the \
+                 Camera section to match it (applies from the next acquisition)."
+            };
+            let align = if chart_open { egui::Align::Center } else { egui::Align::Min }; // in line with the toggle
+            let rtl = egui::Layout::right_to_left(align);
             region(ui, rect.left(), split - 12.0, rtl, &mut |ui| {
+                if !chart_open {
+                    ui.label(RichText::new(&headline).color(strip::AMBER).strong()).on_hover_text(advice);
+                    return;
+                }
                 let width = (ui.available_width() - 16.0).clamp(120.0, 380.0);
                 egui::Frame::group(ui.style()).stroke(egui::Stroke::new(1.0, strip::AMBER)).show(ui, |ui| {
                     ui.set_max_width(width);
                     ui.vertical(|ui| {
-                        ui.label(
-                            RichText::new(format!("Camera running at {measured:.1} fps, stream declared at {active} fps"))
-                                .color(strip::AMBER)
-                                .strong(),
-                        );
-                        let advice = if self.shared.controls.lock().unwrap().frame_rate_set {
-                            "Samples will be dropped or gap-filled. The camera may be triggered externally, or not \
-                             keeping up (e.g. exposure too long for this rate)."
-                        } else {
-                            "Samples will be dropped or gap-filled. This camera won't take a frame rate: use Detect in \
-                             the Camera section to match it (applies from the next acquisition)."
-                        };
+                        ui.label(RichText::new(&headline).color(strip::AMBER).strong());
                         ui.label(RichText::new(advice).small());
                     });
                 });
@@ -507,12 +530,12 @@ impl TrackerApp {
             locked.crop_overlay.locked = true;
             locked.calibration.overlay.locked = true;
             egui::CentralPanel::default().show(ui, |ui| {
-                egui::Panel::bottom("strip").exact_size(STRIP_HEIGHT).show(ui, |ui| self.bottom_strip(ui));
+                egui::Panel::bottom("strip").exact_size(self.strip_height(ui.ctx())).show(ui, |ui| self.bottom_strip(ui));
                 self.video.show(ui, &mut locked, latest.as_ref())
             });
         } else {
             egui::CentralPanel::default().show(ui, |ui| {
-                egui::Panel::bottom("strip").exact_size(STRIP_HEIGHT).show(ui, |ui| self.bottom_strip(ui));
+                egui::Panel::bottom("strip").exact_size(self.strip_height(ui.ctx())).show(ui, |ui| self.bottom_strip(ui));
                 self.video.show(ui, &mut self.state, latest.as_ref())
             });
         }
@@ -545,6 +568,7 @@ mod tests {
     /// Renders the whole window. Run with UPDATE_SNAPSHOTS=1 to accept changes; see tests/snapshots/.
     fn window_snapshot(
         name: &str,
+        chart_open: bool,
         recording: bool,
         setup: impl FnOnce(&Shared),
         configure: impl FnOnce(&mut TrackerState),
@@ -585,18 +609,23 @@ mod tests {
         let mut app = TrackerApp::new(shared, Some(target_format));
         let mut harness =
             egui_kittest::Harness::builder().with_size([1150.0, 650.0]).renderer(renderer).build_ui(|ui| app.show(ui));
+        if chart_open {
+            let mut chart = egui::collapsing_header::CollapsingState::load_with_default_open(&harness.ctx, chart_id(), false);
+            chart.set_open(true);
+            chart.store(&harness.ctx);
+        }
         harness.run();
         harness.snapshot(name);
     }
 
     #[test]
     fn window_crop_editable_rulers_locked() {
-        window_snapshot("tracker_window", false, |_| {}, |s| s.calibration.overlay.locked = true);
+        window_snapshot("tracker_window", true, false, |_| {}, |s| s.calibration.overlay.locked = true);
     }
 
     #[test]
     fn window_detection_hidden() {
-        window_snapshot("tracker_window_detection_hidden", false, |_| {}, |s| s.detection_overlay.visible = false);
+        window_snapshot("tracker_window_detection_hidden", false, false, |_| {}, |s| s.detection_overlay.visible = false);
     }
 
     #[test]
@@ -626,17 +655,17 @@ mod tests {
 
     #[test]
     fn window_rate_warning() {
-        window_snapshot("tracker_window_rate_warning", false, rate_mismatch, |_| {});
+        window_snapshot("tracker_window_rate_warning", false, false, rate_mismatch, |_| {});
     }
 
     #[test]
     fn window_recording() {
-        window_snapshot("tracker_window_recording", true, |_| {}, |_| {});
+        window_snapshot("tracker_window_recording", false, true, |_| {}, |_| {});
     }
 
     #[test]
     fn window_crop_hidden() {
-        window_snapshot("tracker_window_crop_hidden", false, |_| {}, |s| {
+        window_snapshot("tracker_window_crop_hidden", false, false, |_| {}, |s| {
             s.crop_overlay.visible = false;
             s.pipeline.max_area = Some(400); // also shows the Max area row with its value
         });

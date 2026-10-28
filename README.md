@@ -36,8 +36,9 @@ While acquisition runs, a tracker window shows the live video with:
   don't count. The eye highlights above-threshold pixels and circles the two detected regions.
 - **Calibration**: rulers you drag onto things of known size and give a length in cm. The mean pixels per
   metre is shown in the panel and over the video, even while the rulers are hidden.
-- Below the video: a chart of the two LEDs' areas over the last 10 s (to check they stay distinct, e.g.
-  while adjusting zoom and focus), plus a warning if frames arrive at a different rate from the stream's.
+- Below the video: **LED sizes**, a collapsible chart (closed by default) of the two LEDs' areas over the
+  last 10 s, to check they stay distinct, e.g. while adjusting zoom and focus. A warning also appears
+  there if frames arrive at a different rate from the stream's.
 - Stats: frame rate, processing time, dropped frames.
 
 The eye and padlock sit in each section's header. The padlock locks that section's controls and stops its

@@ -28,7 +28,7 @@ pub fn led_chart(ui: &mut egui::Ui, history: &VecDeque<(f64, [u32; 2])>) {
     let step = nice_step(top / 5.0);
 
     Plot::new("led_sizes")
-        .width(READOUT_WIDTH)
+        .width(ui.available_width())
         .height(ui.available_height())
         .x_grid_spacer(uniform_grid_spacer(|_| [1.0, 2.0, 10.0]))
         .x_axis_formatter(|mark, _| format!("{}s", mark.value.round()))
