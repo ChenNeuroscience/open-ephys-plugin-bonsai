@@ -176,6 +176,25 @@ impl TrackerApp {
         if settings.frame_rate != active {
             ui.weak(format!("Running at {active} fps; the new frame rate applies from the next acquisition."));
         }
+
+        // What matters is whether frames arrive at the declared rate, so only say something when they don't.
+        let amber = egui::Color32::from_rgb(230, 170, 60);
+        let stats = self.shared.stats.lock().unwrap().clone();
+        if stats.frames > 2 * active as u64 && (stats.fps as f64 - active).abs() > 0.02 * active {
+            ui.label(RichText::new(format!(
+                "Frames are arriving at {:.1} fps but the stream is declared at {active} fps, so samples will be \
+                 dropped or gap-filled. Set the camera's frame rate (e.g. in SpinView) or change it here.",
+                stats.fps
+            ))
+            .color(amber));
+            for warning in self.shared.camera_warnings.lock().unwrap().iter() {
+                ui.label(RichText::new(warning).color(amber).small());
+            }
+        } else {
+            for warning in self.shared.camera_warnings.lock().unwrap().iter() {
+                ui.weak(RichText::new(warning).small());
+            }
+        }
     }
 
     fn detection(&mut self, ui: &mut egui::Ui) {

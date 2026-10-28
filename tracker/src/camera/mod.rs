@@ -32,6 +32,11 @@ pub trait Camera: Send {
         String::new()
     }
 
+    /// Problems configuring the camera that don't stop it working, shown in the window.
+    fn warnings(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Applies exposure and gain (the frame rate is only set when the camera is opened).
     fn apply(&mut self, _settings: &CameraSettings) -> io::Result<()> {
         Ok(())

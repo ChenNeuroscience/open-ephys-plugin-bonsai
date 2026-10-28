@@ -48,6 +48,8 @@ pub struct Shared {
     pub window_open: AtomicBool,
     /// Size of the latest frame.
     pub frame_size: Mutex<Option<[u32; 2]>>,
+    /// Problems configuring the camera, shown in the window's Camera section.
+    pub camera_warnings: Mutex<Vec<String>>,
     /// What the open camera supports, refreshed after settings are applied.
     pub controls: Mutex<CameraControls>,
     /// Set by the GUI so the capture thread can wake it when a new frame arrives.
@@ -169,15 +171,18 @@ fn capture_loop(shared: &Shared, camera_config: &CameraConfig, tx: &Sender<Track
         let description = camera.description();
         shared.set_status(if description.is_empty() { "running".to_string() } else { format!("running: {description}") });
         *shared.controls.lock().unwrap() = camera.controls();
+        *shared.camera_warnings.lock().unwrap() = camera.warnings();
         let mut last: Option<(u64, f64)> = None;
         let mut applied = None;
 
         while !stopping() {
             let settings = shared.state.lock().unwrap().camera;
             if applied != Some(settings) {
+                let mut warnings = camera.warnings();
                 if let Err(e) = camera.apply(&settings) {
-                    shared.set_status(format!("running: {description} [couldn't apply camera settings: {e}]"));
+                    warnings.push(format!("Couldn't apply exposure/gain: {e}"));
                 }
+                *shared.camera_warnings.lock().unwrap() = warnings;
                 *shared.controls.lock().unwrap() = camera.controls();
                 applied = Some(settings);
             }

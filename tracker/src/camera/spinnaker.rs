@@ -256,6 +256,8 @@ pub struct SpinnakerCamera {
     /// Camera clock timestamps from chunk data (as Bonsai used), rather than the transport layer's.
     chunk_timestamps: bool,
     description: String,
+    /// Things that didn't go to plan when configuring the camera, for the window to show.
+    warnings: Vec<String>,
 }
 
 // The handles are only used from the thread that owns the camera.
@@ -276,6 +278,7 @@ impl SpinnakerCamera {
             map: std::ptr::null_mut(),
             chunk_timestamps: false,
             description: String::new(),
+            warnings: Vec::new(),
         };
         cam.camera = cam.find(serial)?;
         cam.configure(fps)?;
@@ -349,18 +352,18 @@ impl SpinnakerCamera {
             && api.set_enum(map, "ChunkSelector", "Timestamp").is_ok()
             && api.set_bool(map, "ChunkEnable", true).is_ok();
         if !self.chunk_timestamps {
-            notes.push("no chunk timestamps, using transport timestamps".to_string());
+            notes.push("Camera has no chunk timestamps; using transport timestamps.".to_string());
         }
-        // Blackfly S calls it ...Enable, older models ...Enabled.
+        // Older models (Chameleon3, Flea3, Grasshopper3) only allow setting the rate with its auto mode off,
+        // and call the switch ...Enabled; Blackfly S calls it ...Enable.
+        let _ = api.set_enum(map, "AcquisitionFrameRateAuto", "Off");
         let _ = api
             .set_bool(map, "AcquisitionFrameRateEnable", true)
             .or_else(|_| api.set_bool(map, "AcquisitionFrameRateEnabled", true));
         if let Err(e) = api.set_float(map, "AcquisitionFrameRate", fps) {
-            notes.push(format!("couldn't set frame rate: {e}"));
+            notes.push(format!("Couldn't set the frame rate ({e}); it's whatever the camera is configured for."));
         }
-        if !notes.is_empty() {
-            self.description += &format!(" [{}]", notes.join("; "));
-        }
+        self.warnings = notes;
         Ok(())
     }
 }
@@ -424,6 +427,10 @@ impl Camera for SpinnakerCamera {
 
     fn description(&self) -> String {
         format!("Spinnaker: {}", self.description)
+    }
+
+    fn warnings(&self) -> Vec<String> {
+        self.warnings.clone()
     }
 
     fn apply(&mut self, settings: &CameraSettings) -> io::Result<()> {
