@@ -3,7 +3,7 @@
 
 #include <ProcessorHeaders.h>
 
-namespace Bonsai {
+namespace CameraTracker {
 #pragma pack(push, 1)
 /*
   When timestamps are provided in samples, we check the timestamp on a given sample relative to what it should be
@@ -13,7 +13,7 @@ namespace Bonsai {
   things happened, i.e. we dropped a prior sample that was super early but then had to fill the gap. If a sample does
   arrive within +-50% of the expected time we record the error.
 */
-struct BonsaiSampleQuality {
+struct SampleQuality {
     uint8_t dropped_super_early: 1;
     uint8_t filled_too_late: 1;
     uint8_t used_value: 1; // filled_too_late=1 and used_value=1 are mutually exclusive
@@ -26,9 +26,9 @@ struct BonsaiSampleQuality {
     class QualityInfo {
         public:
         CriticalSection lock;
-        std::vector<BonsaiSampleQuality> buffer {};
+        std::vector<SampleQuality> buffer {};
         size_t bufferStartIdx = 0;
-        BonsaiSampleQuality* bufferWritePtr = nullptr;
+        SampleQuality* bufferWritePtr = nullptr;
         int sampleRate = 0;
         constexpr static int bufferSeconds = 10;
         bool enabled = false;
@@ -47,7 +47,7 @@ struct BonsaiSampleQuality {
             enabled = enabled_;
             // if not enabled this is redundant, but whatever...
             buffer.resize(bufferSeconds * sampleRate);
-            std::memset(&buffer[0], 0, buffer.size() * sizeof(BonsaiSampleQuality));
+            std::memset(&buffer[0], 0, buffer.size() * sizeof(SampleQuality));
             bufferStartIdx = 1;
             bufferWritePtr = &buffer[0];
         }

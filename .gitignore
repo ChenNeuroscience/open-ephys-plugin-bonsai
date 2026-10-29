@@ -13,7 +13,15 @@
 
 CMakeFiles
 CMakeScripts
-OE_PLUGIN_open-ephys-plugin-bonsai.xcodeproj
+OE_PLUGIN_open-ephys-plugin-camera.xcodeproj
 Release
 cmake_install.cmake
 CMakeCache.txt
+
+# Rust
+tracker/target
+tracker/tracker-dev.state.json
+tracker/tests/snapshots/*.new.png
+tracker/tests/snapshots/*.diff.png
+tracker/tests/snapshots/*.old.png
+__pycache__/

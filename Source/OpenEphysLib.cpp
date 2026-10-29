@@ -22,7 +22,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 #include <PluginInfo.h>
 
-#include "BonsaiDataThreadPlugin.h"
+#include "CameraDataThreadPlugin.h"
 
 #include <string>
 
@@ -43,7 +43,7 @@ extern "C" EXPORT void getLibInfo(Plugin::LibraryInfo* info)
 	Should not be changed to ensure it is always equal to the one used in the latest codebase.
 	The GUI refuses to load plugins with mismatched API versions */
 	info->apiVersion = PLUGIN_API_VER;
-	info->name = "Bonsai Source"; 
+	info->name = "Camera"; 
 	info->libVersion = "1.0.0";
 	info->numPlugins = NUM_PLUGINS;
 }
@@ -55,8 +55,8 @@ extern "C" EXPORT int getPluginInfo(int index, Plugin::PluginInfo* info)
 	case 0:
 
 		info->type = Plugin::DATA_THREAD;
-		info->dataThread.name = "Bonsai Source";
-		info->dataThread.creator = &createDataThread<Bonsai::DataThreadPlugin>; 
+		info->dataThread.name = "Camera";
+		info->dataThread.creator = &createDataThread<CameraTracker::DataThreadPlugin>; 
 		break;
 
 	default:
